@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Earth–Moon System Visualization</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "orbitControls": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'orbitControls';
+
+// ============================================================================
+// CONSTANTS AND HELPER FUNCTIONS
+// ============================================================================
+
+// Texture URLs
+const EARTH_TEXTURE_URL = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg';
+const MOON_TEXTURE_URL = 'https://threejs.org/examples/textures/planets/moon_1024.jpg';
+
+// Scale conversion constants
+const KM_PER_UNIT = 1200; // Earth radius is ~5.3 units in this scale
+const toUnits = km => km / KM_PER_UNIT;
+const toRadians = degrees => degrees * Math.PI / 180;
+
+// Physical properties (in kilometers, converted to scene units)
+const EARTH_RADIUS_KM = 6371;
+const MOON_RADIUS_KM = 1737;
+const MOON_DISTANCE_KM = 384400;
+
+// Scale the Moon distance to fit better on screen
+const SCENE_MOON_DISTANCE = toUnits(MOON_DISTANCE_KM / 4);
+
+// Orbital properties
+const MOON_ORBITAL_INCLINATION = 5.45; // degrees from ecliptic plane
+const MOON_ORBITAL_ECCENTRICITY = 0.0549;
+const EARTH_AXIAL_TILT = 23.44; // degrees
+const MOON_AXIAL_TILT = 6.68; // degrees
+
+// Time constants for simulation
+const SIMULATION_HOUR = 1; // 1 second of real time represents 1 hour in simulation
+const SIMULATION_DAY = 24 * SIMULATION_HOUR;
+const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
+const EARTH_ROTATION_PERIOD = 23.93447 * SIMULATION_HOUR; // sidereal day
+const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // in simulation seconds
+
+// Camera constants
+const CAMERA_DISTANCE_KM = MOON_DISTANCE_KM; // Distance from Earth center
+const CAMERA_AZIMUTH = 0; // Degrees clockwise from +Z axis
+const CAMERA_ELEVATION = 20; // Degrees above horizontal plane
+
+// ============================================================================
+// SCENE SETUP
+// ============================================================================
+
+// Create renderer
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Create scene
+const scene = new THREE.Scene();
+
+// Create camera
+const cameraDistance = toUnits(CAMERA_DISTANCE_KM);
+const cameraAzimuth = toRadians(CAMERA_AZIMUTH);
+const cameraElevation = toRadians(CAMERA_ELEVATION);
+
+const camera = new THREE.PerspectiveCamera(
+  45, // Field of view
+  innerWidth / innerHeight, // Aspect ratio
+  0.1, // Near clipping plane
+  1000 // Far clipping plane
+);
+
+camera.position.set(
+  cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth), // x
+  cameraDistance * Math.sin(cameraElevation), // y
+  cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth) // z
+);
+camera.lookAt(0, 0, 0); // Point camera at Earth center
+
+// Setup camera controls
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = toUnits(10000); // From Earth center
+controls.maxDistance = 4 * SCENE_MOON_DISTANCE;
+
+// ============================================================================
+// LIGHTING SETUP
+// ============================================================================
+
+// Ambient light for overall scene illumination
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.05);
+scene.add(ambientLight);
+
+// Directional light to simulate sunlight
+const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+const sunDistance = 10 * SCENE_MOON_DISTANCE;
+sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane
+sunLight.lookAt(0, 0, 0);
+scene.add(sunLight);
+
+// ============================================================================
+// ORBITAL MECHANICS SETUP
+// ============================================================================
+
+// Create the Moon's orbital plane with proper inclination
+const moonOrbitalPlane = new THREE.Object3D();
+moonOrbitalPlane.rotation.x = -toRadians(MOON_ORBITAL_INCLINATION);
+
+// Create anchor point for the Moon at Earth's center
+const moonAnchor = new THREE.Object3D();
+moonOrbitalPlane.add(moonAnchor);
+scene.add(moonOrbitalPlane);
+
+// Create the Moon's orbital path visualization
+const semiMajorAxis = SCENE_MOON_DISTANCE;
+const semiMinorAxis = semiMajorAxis * Math.sqrt(1 - MOON_ORBITAL_ECCENTRICITY * MOON_ORBITAL_ECCENTRICITY);
+
+const orbitCurve = new THREE.EllipseCurve(
+  0, 0, // center at Earth
+  semiMajorAxis, semiMinorAxis, // x-radius, y-radius
+  0, 2 * Math.PI, // start, end angle
+  false, // clockwise
+  0 // rotation
+);
+
+// Convert 2D curve points to 3D points in the orbital plane
+const orbitPoints = [];
+orbitCurve.getPoints(200).forEach(point => {
+  orbitPoints.push(new THREE.Vector3(point.x, 0, point.y));
+});
+
+const orbitGeometry = new THREE.BufferGeometry().setFromPoints(orbitPoints);
+
+// Create a visible line for the orbital path
+const orbitMaterial = new THREE.LineBasicMaterial({
+  color: 0x4488ff,
+  transparent: true,
+  opacity: 0.35
+});
+
+const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+moonOrbitalPlane.add(orbitLine);
+
+// ============================================================================
+// CELESTIAL BODY CREATION
+// ============================================================================
+
+// Create Earth with axial tilt
+const earthAxis = new THREE.Object3D();
+earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
+scene.add(earthAxis);
+
+// Load Earth texture and create Earth mesh
+const textureLoader = new THREE.TextureLoader();
+const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
+
+const earth = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
+  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
+);
+earthAxis.add(earth);
+
+// Create Moon
+const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
+
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
+  new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
+);
+
+moonAnchor.add(moon);
+moon.rotation.z = -toRadians(MOON_AXIAL_TILT);
+moon.position.set(SCENE_MOON_DISTANCE, 0, 0);
+
+// ============================================================================
+// ANIMATION LOOP
+// ============================================================================
+
+// Calculate rotation speeds in radians per second
+const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
+const moonOrbitSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
+const moonRotationSpeed = moonOrbitSpeed; // Moon is tidally locked
+const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
+
+// Create clock for timing
+const clock = new THREE.Clock();
+
+// Animation loop function
+function animate() {
+  requestAnimationFrame(animate);
+
+  const elapsedTime = clock.getElapsedTime();
+
+  // Rotate Earth
+  earth.rotation.y = elapsedTime * earthRotationSpeed;
+
+  // Orbit Moon around Earth
+  moonAnchor.rotation.y = elapsedTime * moonOrbitSpeed + toRadians(-90);
+
+  // Rotate Moon on its axis (tidally locked)
+  moon.rotation.y = elapsedTime * moonRotationSpeed;
+
+  // Simulate Sun's orbit around Earth (for lighting)
+  const sunAngle = elapsedTime * sunOrbitSpeed;
+  sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
+
+  // Update controls
+  controls.update();
+
+  // Render the scene
+  renderer.render(scene, camera);
+}
+
+// Start animation
+animate();
+
+// ============================================================================
+// WINDOW RESIZE HANDLING
+// ============================================================================
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
