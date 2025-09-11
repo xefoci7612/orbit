@@ -51,7 +51,7 @@ const SIMULATION_DAY = 24 * SIMULATION_HOUR;
 const SIMULATION_YEAR = 365.25 * SIMULATION_DAY;
 const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
 const EARTH_ROTATION_PERIOD = 23.93447 * SIMULATION_HOUR; // sidereal day
-const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // in simulation seconds
+const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // sidereal year
 const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state orientation
 
 // ============================================================================
@@ -64,6 +64,17 @@ const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state o
       B[0].map((_, j) => row.reduce((s, v, k) => s + v * B[k][j], 0))
     );
   }
+
+  // Calculate the number of days since the start of the year for a given date string
+  function daysSinceStartOfYear(dateString) {
+    const targetDate = new Date(dateString);
+    const year = targetDate.getFullYear();
+    const startOfYear = new Date(year, 0, 1); // Months are 0-indexed, so 0 = January
+    return (targetDate - startOfYear) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
+  }
+
+  // Our reference date is September 10, 2025
+  const DAYS_SINCE_SOY = daysSinceStartOfYear('2025-09-10');
 
   // Orbital parameters constants for September 10, 2025 (from JPL Horizons)
   const EC = 0.05212487669881421; // eccentricity
@@ -80,32 +91,23 @@ const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state o
   const moonDistance = toUnits(Math.hypot(Xe, Ye, Ze));
 
   // Change vector coordinates from elliptic J2000.0 into the Moon's orbital plane.
-  // We need to perform 3 rotations (right-hand rule):
-  // 1. Rotate around Z-axis by OM (longitude of ascending node)
-  const Rz_Om = [
-        [ Math.cos(OM), Math.sin(OM), 0],
-        [-Math.sin(OM), Math.cos(OM), 0],
-        [            0,            0, 1]];
-  // 2. Rotate around X-axis by IN (inclination)
-  const Rx_i = [
-        [1,            0,            0],
-        [0, Math.cos(IN), Math.sin(IN)],
-        [0,-Math.sin(IN), Math.cos(IN)]];
-  // 3. Rotate around the new Z-axis by the Argument of Perifocus (ω)
-  const Rz_W = [
-        [ Math.cos(W), Math.sin(W), 0],
-        [-Math.sin(W), Math.cos(W), 0],
-        [            0,          0, 1]];
+  // We need to perform 3 rotations (right-hand rule): R = Rz(Ω) * Rx(i) * Rz(ω)
+  const z_axis = new THREE.Vector3(0, 0, 1);
+  const x_axis = new THREE.Vector3(1, 0, 0);
+  const rzO = new THREE.Quaternion().setFromAxisAngle(z_axis, OM); // Rz(Ω)
+  const rxI = new THREE.Quaternion().setFromAxisAngle(x_axis, IN); // Rx(i)
+  const rzW = new THREE.Quaternion().setFromAxisAngle(z_axis,  W); // Rz(ω)
 
-  // The combined transformation matrix M is: M = R_z(ω) * R_x(i) * R_z(Ω)
-  const M = mm(Rz_W, mm(Rx_i, Rz_Om));
-  const rJ2000 = [Xe, Ye, Ze];
+  // The full rotation transforms coordinates FROM the orbital plane TO the ecliptic plane
+  // To transform a vector FROM ecliptic TO the orbital plane, we need the INVERSE rotation
+  const R_inverse = new THREE.Quaternion().multiply(rzO).multiply(rxI).multiply(rzW).invert();
 
-  // Coordinates of Moon's orbital plane with origin at Earth's center are defined as:
-  // Xp points towards the Ascending Node
-  // Yp points 90° ahead in the direction of motion
-  // Zp points perpendicular to the orbital plane (and should be ~0 for the Moon)
-  const [Xp, Yp, Zp] = M.map(row => row.reduce((s,  v, k) => s + v * rJ2000[k], 0));
+  // Apply rotation to get vector in orbital plane
+  const rJ2000 = new THREE.Vector3(Xe, Ye, Ze);
+  const rOrb = rJ2000.clone().applyQuaternion(R_inverse);
+  const Xp = rOrb.x; // points towards the Ascending Node
+  const Yp = rOrb.y; // points 90° ahead in the direction of motion
+  const Zp = rOrb.z; // points perpendicular to the orbital plane (should be ~0)
 
   console.assert(Math.abs(Zp) < 0.1, `Zp should be ~0 in orbital plane, got ${Zp}`);
 
@@ -189,23 +191,6 @@ controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
   in a different order.
 */
 
-/*
-const moonOrbitCurve2D = new THREE.EllipseCurve(
-  0, 0,                         // center at Earth
-  semiMajorAxis, semiMinorAxis, // radii
-  0, 2 * Math.PI,               // full sweep
-  false,                        // counter-clockwise
-  perigeeAngle                  // rotation so perigee sits at the correct angle
-);
-
-// Create a visible line for the orbital path
-const moonOrbitPoints3D = [];
-moonOrbitCurve2D.getPoints(1024).forEach(point => {
-  // Map the 2D point (point.x, point.y) to the 3D plane (x, 0, z)
-  moonOrbitPoints3D.push(new THREE.Vector3(point.x, 0, point.y));
-});
-*/
-
 // Create the Moon's orbital plane with nested objects to handle rotations
 // Create an object that handles the longitude of the ascending node (OM)
 const nodeObject = new THREE.Object3D();
@@ -236,7 +221,7 @@ for (let i = 0; i < SEG; i++) {
   positions[i*3+2] = r * Math.sin(angle);                  // z
 }
 orbitGeometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
-const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+const orbitLine = new THREE.LineLoop(orbitGeometry, orbitMaterial);
 inclinationObject.add(orbitLine);
 
 // Create Moon with axial tilt
@@ -327,7 +312,7 @@ const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
 const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
 const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
-const sunInitialAngle = (253 / 365.25) * 2 * Math.PI; // at 2025-09-10
+const sunInitialAngle = (DAYS_SINCE_SOY / 365.25) * 2 * Math.PI;
 
 // Create clock for timing
 const clock = new THREE.Clock();
