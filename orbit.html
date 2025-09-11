@@ -9,9 +9,82 @@
       overflow: hidden;
       background: #000;
     }
+    #hud {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      color: #fff;
+      font: 14px/1.2 system-ui, sans-serif;
+      pointer-events: none; /* let clicks pass through by default */
+    }
+    .hud__row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 12px;
+      margin: 0 auto 4px auto;
+      width: 96%;
+      max-width: 900px;
+      background: rgba(0,0,0,.35);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,.25);
+      border-radius: 8px;
+      pointer-events: auto;
+    }
+    .hud__group { display: flex; align-items: center; gap: 8px; }
+    input, button {
+      font: inherit; color: inherit; background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.35);
+      border-radius: 4px; padding: 4px 6px;
+    }
+    button { cursor: pointer; min-width: 32px; }
+    button:hover { background: rgba(255,255,255,.25); }
+    input[type=range] { width: 100px; accent-color: #4488ff; }
+    #speedOut { width: 48px; text-align: right; }
+    /* camera row */
+    .hud__cam { justify-content: flex-start; gap: 6px; }
+    .camBtn { width: 32px; }
+    #camStore { margin-left: auto; margin-right: 6px; }
+    #camClose { background: none; border: none; opacity: .7; }
   </style>
 </head>
 <body>
+<div id="hud">
+  <div class="hud__row hud__main">
+    <!-- LEFT -->
+    <div class="hud__group">
+      <label title="Date / Time (UTC+2)">
+        <input id="simDate" type="date">
+        <input id="simTime" type="time" step="60">
+      </label>
+      <span id="simElapsed">+0.0 d</span>
+    </div>
+
+    <!-- CENTRE -->
+    <div class="hud__group">
+      <button id="btnReverse" aria-label="Reverse time">⏪</button>
+      <button id="btnPlay"   aria-label="Play/Pause">⏸</button>
+      <button id="btnReset"  aria-label="Reset">⟲</button>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="hud__group">
+      <span class="speedLabel">speed</span>
+      <input id="speedSlider" type="range" min="-2" max="2" step="0.02" value="0">
+      <output id="speedOut" for="speedSlider">1 ×</output>
+    </div>
+  </div>
+
+  <!-- Second row: camera snapshots -->
+  <div class="hud__row hud__cam" id="camRow" hidden>
+    <button class="camBtn" data-slot="1">1</button>
+    <button class="camBtn" data-slot="2">2</button>
+    <button class="camBtn" data-slot="3">3</button>
+    <button id="camStore" aria-label="Store current">💾</button>
+    <button id="camClose" aria-label="Close bar">✕</button>
+  </div>
+</div>
 
 <script type="importmap">
 {
@@ -23,6 +96,17 @@
 </script>
 
 <script type="module">
+
+/*
+  TODO:
+    - highlight orbital nodes, perigee, apogee
+    - Show/set current simulation time (in days/hours)
+    - Add stars background
+    - Pause/play button
+    - Speed control slider up and reverse time
+    - Reset view button
+*/
+
 import * as THREE from 'three';
 import { OrbitControls } from 'orbitControls';
 
@@ -66,15 +150,15 @@ const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state o
   }
 
   // Calculate the number of days since the start of the year for a given date string
-  function daysSinceStartOfYear(dateString) {
-    const targetDate = new Date(dateString);
+  function daysSinceStartOfYear(targetDate) {
     const year = targetDate.getFullYear();
     const startOfYear = new Date(year, 0, 1); // Months are 0-indexed, so 0 = January
     return (targetDate - startOfYear) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
   }
 
   // Our reference date is September 10, 2025
-  const DAYS_SINCE_SOY = daysSinceStartOfYear('2025-09-10');
+  const REFERENCE_DATE = new Date('2025-09-10T00:00:00Z');
+  const DAYS_SINCE_SOY = daysSinceStartOfYear(REFERENCE_DATE);
 
   // Orbital parameters constants for September 10, 2025 (from JPL Horizons)
   const EC = 0.05212487669881421; // eccentricity
@@ -203,33 +287,32 @@ inclinationObject.rotation.x = IN; // rotation around the NEW x-axis
 nodeObject.add(inclinationObject);
 
 // Create a 2D elliptical curve for the Moon's orbit in its orbital plane
-const SEG = 360;
-const positions = new Float32Array(SEG * 3);
-const orbitGeometry = new THREE.BufferGeometry();
+const SEGMENTS = 360;
+const positions = new Float32Array(SEGMENTS * 3);
+for (let i = 0; i < SEGMENTS; i++) {
+  const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
+  const angle = ta + perigeeAngle;         // angle from node
+  const r = semiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+  positions[i*3 + 0] = r * Math.cos(angle); // x
+  positions[i*3 + 1] = 0;                   // y  (on orbital plane)
+  positions[i*3 + 2] = r * Math.sin(angle); // z
+}
+const vertexBuffer = new THREE.BufferAttribute(positions, 3);
+const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
 const orbitMaterial = new THREE.LineBasicMaterial({
   color: 0x4488ff, // light blue
   transparent: true,
   opacity: 0.35
 });
-
-for (let i = 0; i < SEG; i++) {
-  const ν = (i / SEG) * 2 * Math.PI;                       // true anomaly
-  const r = semiMajorAxis * (1 - EC*EC) / (1 + EC*Math.cos(ν));
-  const angle = ν + perigeeAngle;                          // angle from node
-  positions[i*3]   = r * Math.cos(angle);                  // x
-  positions[i*3+1] = 0;                                    // y  (orbital plane)
-  positions[i*3+2] = r * Math.sin(angle);                  // z
-}
-orbitGeometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
 const orbitLine = new THREE.LineLoop(orbitGeometry, orbitMaterial);
 inclinationObject.add(orbitLine);
 
-// Create Moon with axial tilt
+// Create Moon
+const textureLoader = new THREE.TextureLoader();
+
 const moonAxis = new THREE.Object3D();
 moonAxis.rotation.z = -toRadians(MOON_AXIAL_TILT);
 inclinationObject.add(moonAxis);
-
-const textureLoader = new THREE.TextureLoader();
 const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
 const moon = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
@@ -237,7 +320,7 @@ const moon = new THREE.Mesh(
 );
 moonAxis.add(moon);
 
-// Create Earth with axial tilt
+// Create Earth
 const earthAxis = new THREE.Object3D();
 earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
 scene.add(earthAxis);
@@ -253,7 +336,7 @@ earthAxis.add(earth);
 // ============================================================================
 
 /**
- * Solves Kepler's Equation (M = E - e * sin(E)) for the Eccentric Anomaly (E).
+ * Solves Kepler's Equation M = E - e * sin(E) for the Eccentric Anomaly (E).
  * Uses the Newton-Raphson iterative method.
  *
  * @param {number} M - The Mean Anomaly in radians.
@@ -267,14 +350,13 @@ function solveKepler(M, e) {
 
   for (let i = 0; i < maxIterations; i++) {
     const f = E - e * Math.sin(E) - M; // The function we want to find the root of
-    const fPrime = 1 - e * Math.cos(E); // The derivative of f
+    const fPrime = 1 - e * Math.cos(E); // The derivative df/dE
     const deltaE = f / fPrime;
 
     E = E - deltaE; // New, better guess for E
 
-    if (Math.abs(deltaE) < tolerance) {
+    if (Math.abs(deltaE) < tolerance)
       break; // Solution is accurate enough
-    }
   }
   return E;
 }
@@ -287,7 +369,7 @@ function getMoonPosition(elapsedTime) {
   const E = solveKepler(M, EC); // Kepler's Second Law
 
   // Calculate the current True Anomaly (TA or ν), the real angle from perigee
-  const sinE = Math.sin(E), cosE = Math.cos(E);
+  const [sinE, cosE] = [Math.sin(E), Math.cos(E)];
   const sinTA = Math.sqrt(1 - EC*EC) * sinE / (1 - EC * cosE);
   const cosTA = (cosE - EC) / (1 - EC * cosE);
   const TA = Math.atan2(sinTA, cosTA);
@@ -296,8 +378,7 @@ function getMoonPosition(elapsedTime) {
   const r = semiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
 
   // Calculate position in the orbital plane
-  // Add perigeeAngle to TA to get the angle from the ascending node (X-axis)
-  const angleFromAscendingNode = TA + perigeeAngle;
+  const angleFromAscendingNode = TA + perigeeAngle; // x-axis is at ascending node
   const x = r * Math.cos(angleFromAscendingNode);
   const z = r * Math.sin(angleFromAscendingNode);
   return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
@@ -307,52 +388,55 @@ function getMoonPosition(elapsedTime) {
 // ANIMATION LOOP
 // ============================================================================
 
-// Calculate simulation constants
+// Calculate simulation constants and state
 const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
 const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
 const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
 const sunInitialAngle = (DAYS_SINCE_SOY / 365.25) * 2 * Math.PI;
 
-// Create clock for timing
 const clock = new THREE.Clock();
-let elapsedTime = 0;
+const TZ_OFFSET = 2; // UTC+2
+let isPlaying   = true;
+let speed       = 1; // 1 = 1 sec real-time ↔ 1 h sim-time
+let elapsedTime = 0; // 1 second real time = 1 hour sim time
 
 // Animation loop function
 function animate() {
-  requestAnimationFrame(animate);
 
-  elapsedTime += clock.getDelta();
+  elapsedTime += (isPlaying ? speed : 0) * clock.getDelta();
 
   // Rotate Earth
   earth.rotation.y = elapsedTime * earthRotationSpeed;
 
   // Orbit Moon around Earth
-  [moonAxis.position.x, moonAxis.position.y, moonAxis.position.z] = getMoonPosition(elapsedTime);
+  const [x, y, z] = getMoonPosition(elapsedTime);
+  moonAxis.position.set(x, y, z);
 
-  // Simulate moon's nodal precession
-  moonAxis.rotation.y = -moonNodeSpeed * elapsedTime; // retrograde precession
+  // Moon's nodal (retrograde) precession
+  moonAxis.rotation.y = -moonNodeSpeed * elapsedTime;
 
-  // This is the physically literal model of tidal locking, add 180-degree
-  // offset because texture is centered on 0° longitude (earth facing)
-  moon.rotation.y = moonSiderealRotationSpeed * elapsedTime + Math.PI;
+  // Moon rotation, add 180-degree because Moon texture
+  // is centered on 0° longitude (facing earth)
+  moon.rotation.y = moonSiderealRotationSpeed * elapsedTime + Math.PI; // in tidal locking
 
-  // Simulate Sun's orbit around Earth (for lighting)
+  // Simulate Sun's (circular) orbit around Earth (for lighting)
   const sunAngle = sunInitialAngle + elapsedTime * sunOrbitSpeed;
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
   // Update controls
   controls.update();
+  updateInputs();
 
   // Render the scene
   renderer.render(scene, camera);
+
+  // Schedule next update
+  requestAnimationFrame(animate);
 }
 
-// Start animation
-animate();
-
 // ============================================================================
-// WINDOW RESIZE HANDLING
+// UI CONTROLS
 // ============================================================================
 
 addEventListener('resize', () => {
@@ -360,6 +444,97 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// --- dom hooks -----------------------------------------------
+const dateInp  = document.getElementById('simDate');
+const timeInp  = document.getElementById('simTime');
+const elapsedS = document.getElementById('simElapsed');
+const playBtn  = document.getElementById('btnPlay');
+const revBtn   = document.getElementById('btnReverse');
+const resBtn   = document.getElementById('btnReset');
+const speedSl  = document.getElementById('speedSlider');
+const speedOut = document.getElementById('speedOut');
+const camRow   = document.getElementById('camRow');
+const camStore = document.getElementById('camStore');
+const camClose = document.getElementById('camClose');
+
+// --- converters ----------------------------------------------
+const toDateStr = d => d.toISOString().slice(0, 10);
+const toTimeStr = d => d.toISOString().slice(11, 19);
+const toLocal   = d => new Date(d.getTime() + TZ_OFFSET * 3600_000);
+const toMilliSec = d => d * 3600 * 1000; // hours to ms
+
+function updateInputs(){
+  const cur = new Date(REFERENCE_DATE.getTime() + toMilliSec(elapsedTime));
+  dateInp.value = toDateStr(cur);
+  timeInp.value = toTimeStr(cur);
+  elapsedS.textContent = (elapsedTime / 24).toFixed(1)+' d';
+}
+function setElapsedFromInputs(){
+  const d = new Date(dateInp.value+'T'+timeInp.value+'Z');
+  elapsedTime = (d - REFERENCE_DATE) / (3600 * 1000);
+  console.log({d, elapsedTime});
+  updateInputs();
+}
+
+// --- transport controls --------------------------------------
+playBtn.onclick = ()=>{
+  isPlaying = !isPlaying;
+  playBtn.textContent = isPlaying ? '⏸' : '▶';
+};
+
+resBtn.onclick = ()=>{
+  elapsedTime = 0;
+  updateInputs();
+};
+
+revBtn.onclick = ()=> { speed *= -1; syncSpeedUI(); };
+
+speedSl.oninput = e=>{
+  const sign = Math.sign(speed); // keep sign
+  speed = sign*10**Number(e.target.value); // log scale 0.01…100
+  syncSpeedUI();
+};
+
+function syncSpeedUI(){
+  speedOut.textContent = (speed<0?'−':'') + Math.abs(speed).toFixed(1)+' ×';
+  speedSl.value = Math.log10(Math.abs(speed));
+}
+
+// --- date/time input event listeners -------------------------
+dateInp.onchange = setElapsedFromInputs;
+timeInp.onchange = setElapsedFromInputs;
+
+// --- camera snapshot -----------------------------------------
+const CAM_KEY = 'orbitCamSlots';
+let slots = JSON.parse(localStorage.getItem(CAM_KEY) || '[]');
+function refreshCamButtons(){
+  document.querySelectorAll('.camBtn').forEach((b,i)=>{
+    b.style.opacity = slots[i] ? '1' : '.35';
+    b.onclick = ()=> slots[i] && applyCam(slots[i]);
+  });
+}
+function applyCam({pos,target}){
+  camera.position.set(...pos);
+  controls.target.set(...target);
+  controls.update();
+}
+camStore.onclick = ()=>{
+  const idx = slots.findIndex(s=>!s);                // first empty
+  if(idx===-1) slots.push({pos:camera.position.toArray(),target:controls.target.toArray()});
+  else slots[idx] = {pos:camera.position.toArray(),target:controls.target.toArray()};
+  localStorage.setItem(CAM_KEY, JSON.stringify(slots));
+  refreshCamButtons();
+};
+document.addEventListener('keydown', e=>{
+  if(e.ctrlKey && e.key==='b'){ camRow.hidden = !camRow.hidden; } // Ctrl-B toggles bar
+});
+camClose.onclick = ()=> camRow.hidden = true;
+refreshCamButtons();
+
+// Start animation
+animate();
+
 </script>
 </body>
 </html>
