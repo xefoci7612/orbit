@@ -4,17 +4,28 @@
   <meta charset="utf-8"/>
   <title>Earth–Moon System Visualization</title>
   <style>
+    :root {
+      /* Color definitions */
+      --color-black: #000;
+      --color-white: #fff;
+      --color-primary: rgba(255,255,255,.12);
+      --color-primary-hover: rgba(255,255,255,.25);
+      --color-border: rgba(255,255,255,.35);
+      --color-border-light: rgba(255,255,255,.25);
+      --color-background: rgba(0,0,0,.35);
+      --color-orbit: #4488ff;
+    }
     body {
       margin: 0;
       overflow: hidden;
-      background: #000;
+      background: var(--color-black);
     }
     #hud {
       position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
-      color: #fff;
+      color: var(--color-white);
       font: 14px/1.2 system-ui, sans-serif;
       pointer-events: none; /* let clicks pass through by default */
     }
@@ -26,22 +37,22 @@
       margin: 0 auto 4px auto;
       width: 96%;
       max-width: 900px;
-      background: rgba(0,0,0,.35);
+      background: var(--color-background);
       backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,.25);
+      border: 1px solid var(--color-border-light);
       border-radius: 8px;
       pointer-events: auto;
     }
     .hud__group { display: flex; align-items: center; gap: 8px; }
     input, button {
-      font: inherit; color: inherit; background: rgba(255,255,255,.12);
-      border: 1px solid rgba(255,255,255,.35);
+      font: inherit; color: inherit; background: var(--color-primary);
+      border: 1px solid var(--color-border);
       border-radius: 4px; padding: 4px 6px;
     }
     button { cursor: pointer; min-width: 32px; }
-    button:hover { background: rgba(255,255,255,.25); }
-    input[type=range] { width: 100px; accent-color: #4488ff; }
-    #speedOut { width: 48px; text-align: right; }
+    button:hover { background: var(--color-primary-hover); }
+    input[type=range] { width: 90px; accent-color: var(--color-primary); background: var(--color-primary); }
+    #speedOut { width: 58px; text-align: right; }
     /* camera row */
     .hud__cam { justify-content: flex-start; gap: 6px; }
     .camBtn { width: 32px; }
@@ -63,15 +74,14 @@
 
     <!-- CENTRE -->
     <div class="hud__group">
-      <button id="btnReverse" aria-label="Reverse time">⏪</button>
+      <button id="btnReverse" aria-label="Reverse time">▻</button>
       <button id="btnPlay"   aria-label="Play/Pause">⏸</button>
       <button id="btnReset"  aria-label="Reset">⟲</button>
     </div>
 
     <!-- RIGHT -->
     <div class="hud__group">
-      <span class="speedLabel">speed</span>
-      <input id="speedSlider" type="range" min="-2" max="2" step="0.02" value="0">
+      <input id="speedSlider" type="range" min="0" max="10" step="1" value="1">
       <output id="speedOut" for="speedSlider">1 ×</output>
     </div>
   </div>
@@ -81,8 +91,6 @@
     <button class="camBtn" data-slot="1">1</button>
     <button class="camBtn" data-slot="2">2</button>
     <button class="camBtn" data-slot="3">3</button>
-    <button id="camStore" aria-label="Store current">💾</button>
-    <button id="camClose" aria-label="Close bar">✕</button>
   </div>
 </div>
 
@@ -100,11 +108,7 @@
 /*
   TODO:
     - highlight orbital nodes, perigee, apogee
-    - Show/set current simulation time (in days/hours)
     - Add stars background
-    - Pause/play button
-    - Speed control slider up and reverse time
-    - Reset view button
 */
 
 import * as THREE from 'three';
@@ -114,8 +118,16 @@ import { OrbitControls } from 'orbitControls';
 // CONSTANTS AND HELPER FUNCTIONS
 // ============================================================================
 
-const EARTH_TEXTURE_URL = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg';
-const MOON_TEXTURE_URL = 'https://threejs.org/examples/textures/planets/moon_1024.jpg';
+const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
+const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
+const SKY_TEXTURE_URL = [  // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
+    'textures/sky_px.png', // Right
+    'textures/sky_nx.png', // Left
+    'textures/sky_py.png', // Top
+    'textures/sky_ny.png', // Bottom
+    'textures/sky_pz.png', // Front
+    'textures/sky_nz.png'  // Back
+];
 
 // Scale conversion constants
 const KM_PER_UNIT = 1200; // Earth radius is ~5.3 units in this scale
@@ -227,6 +239,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
+const cubeTextureLoader = new THREE.CubeTextureLoader();
+scene.background = cubeTextureLoader.load(SKY_TEXTURE_URL);
 
 // Ambient light for overall scene illumination
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.05); // White light, low intensity
@@ -261,6 +275,10 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.minDistance = toUnits(2 * EARTH_RADIUS_KM); // From Earth center
 controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
+
+// Store initial camera position and target
+const initialCameraPosition = camera.position.clone();
+const initialCameraTarget = controls.target.clone();
 
 // ============================================================================
 // CELESTIAL BODY CREATION
@@ -426,7 +444,7 @@ function animate() {
 
   // Update controls
   controls.update();
-  updateInputs();
+  updateDateTimeUI();
 
   // Render the scene
   renderer.render(scene, camera);
@@ -439,13 +457,6 @@ function animate() {
 // UI CONTROLS
 // ============================================================================
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// --- dom hooks -----------------------------------------------
 const dateInp  = document.getElementById('simDate');
 const timeInp  = document.getElementById('simTime');
 const elapsedS = document.getElementById('simElapsed');
@@ -458,81 +469,126 @@ const camRow   = document.getElementById('camRow');
 const camStore = document.getElementById('camStore');
 const camClose = document.getElementById('camClose');
 
-// --- converters ----------------------------------------------
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 19);
-const toLocal   = d => new Date(d.getTime() + TZ_OFFSET * 3600_000);
-const toMilliSec = d => d * 3600 * 1000; // hours to ms
 
-function updateInputs(){
-  const cur = new Date(REFERENCE_DATE.getTime() + toMilliSec(elapsedTime));
+function updateDateTimeUI() {
+  const elapsedMsec = elapsedTime * 3600 * 1000; // hours to ms
+  const cur = new Date(REFERENCE_DATE.getTime() + elapsedMsec);
   dateInp.value = toDateStr(cur);
   timeInp.value = toTimeStr(cur);
   elapsedS.textContent = (elapsedTime / 24).toFixed(1)+' d';
 }
-function setElapsedFromInputs(){
+
+function dateTimeChanged() {
   const d = new Date(dateInp.value+'T'+timeInp.value+'Z');
   elapsedTime = (d - REFERENCE_DATE) / (3600 * 1000);
   console.log({d, elapsedTime});
-  updateInputs();
+  updateDateTimeUI();
 }
 
-// --- transport controls --------------------------------------
+function updateSpeedUI() {
+  speedOut.textContent = (speed < 0?'−':'') + Math.abs(speed).toFixed(1)+' ×';
+  const sliderValue = Math.sqrt(Math.abs(speed)); // power of 2 scaling
+  speedSl.value = sliderValue;
+  revBtn.textContent = speed < 0 ? '◅' : '▻';
+}
+
+function speedChanged() {
+  const sign = speed !== 0 ? Math.sign(speed) : 1; // keep sign
+  const sliderValue = Number(speedSl.value);
+  speed = sign * (sliderValue * sliderValue); // power of 2 scaling
+  updateSpeedUI();
+};
+
+dateInp.onchange = dateTimeChanged;
+timeInp.onchange = dateTimeChanged;
+speedSl.oninput = speedChanged;
+
 playBtn.onclick = ()=>{
   isPlaying = !isPlaying;
   playBtn.textContent = isPlaying ? '⏸' : '▶';
 };
 
+revBtn.onclick = ()=> {
+  speed *= -1;
+  revBtn.textContent = speed < 0 ? '◅' : '▻';
+  updateSpeedUI();
+};
+
 resBtn.onclick = ()=>{
   elapsedTime = 0;
-  updateInputs();
+  speed = 1;
+  updateDateTimeUI();
+  updateSpeedUI();
+
+  camera.position.copy(initialCameraPosition);
+  controls.target.copy(initialCameraTarget);
+  controls.update();
 };
 
-revBtn.onclick = ()=> { speed *= -1; syncSpeedUI(); };
-
-speedSl.oninput = e=>{
-  const sign = Math.sign(speed); // keep sign
-  speed = sign*10**Number(e.target.value); // log scale 0.01…100
-  syncSpeedUI();
-};
-
-function syncSpeedUI(){
-  speedOut.textContent = (speed<0?'−':'') + Math.abs(speed).toFixed(1)+' ×';
-  speedSl.value = Math.log10(Math.abs(speed));
-}
-
-// --- date/time input event listeners -------------------------
-dateInp.onchange = setElapsedFromInputs;
-timeInp.onchange = setElapsedFromInputs;
-
-// --- camera snapshot -----------------------------------------
 const CAM_KEY = 'orbitCamSlots';
 let slots = JSON.parse(localStorage.getItem(CAM_KEY) || '[]');
-function refreshCamButtons(){
-  document.querySelectorAll('.camBtn').forEach((b,i)=>{
-    b.style.opacity = slots[i] ? '1' : '.35';
-    b.onclick = ()=> slots[i] && applyCam(slots[i]);
-  });
-}
-function applyCam({pos,target}){
+let pressedSlotIndex = null;
+let clickTimer = null;
+
+function setCameraView({pos, target}){
   camera.position.set(...pos);
   controls.target.set(...target);
   controls.update();
 }
-camStore.onclick = ()=>{
-  const idx = slots.findIndex(s=>!s);                // first empty
-  if(idx===-1) slots.push({pos:camera.position.toArray(),target:controls.target.toArray()});
-  else slots[idx] = {pos:camera.position.toArray(),target:controls.target.toArray()};
-  localStorage.setItem(CAM_KEY, JSON.stringify(slots));
-  refreshCamButtons();
-};
-document.addEventListener('keydown', e=>{
-  if(e.ctrlKey && e.key==='b'){ camRow.hidden = !camRow.hidden; } // Ctrl-B toggles bar
-});
-camClose.onclick = ()=> camRow.hidden = true;
-refreshCamButtons();
 
-// Start animation
+function CamBtnPressed(slotIndex) {
+  pressedSlotIndex = slotIndex;
+  clickTimer = Date.now(); // start timer for double-click detection
+}
+
+function CamBtnReleased(slotIndex) {
+
+  const longClick = (Date.now() - clickTimer) > 400; // 400 ms threshold
+  const sameBtn = pressedSlotIndex === slotIndex;
+  pressedSlotIndex = null; // reset
+  clickTimer = null;
+
+  if (!sameBtn)
+    return;
+
+  // Long click: clear the slot
+  if (longClick) {
+    slots[slotIndex] = null;
+    localStorage.setItem(CAM_KEY, JSON.stringify(slots));
+    this.style.opacity = '.35';
+  } else {
+    // Normal click: either save or restore camera
+    // according if slot is empty or not
+    const slot = slots[slotIndex];
+    if (slot) {
+      setCameraView(slot);
+    } else {
+      const slot = {
+        pos: camera.position.toArray(),
+        target: controls.target.toArray()
+      };
+      slots[slotIndex] = slot;
+      localStorage.setItem(CAM_KEY, JSON.stringify(slots));
+      this.style.opacity = '1';
+    }
+  }
+}
+
+// Bind all camera buttons to click and double-click handlers
+document.querySelectorAll('.camBtn').forEach((b,i)=>{
+  b.onmousedown = CamBtnPressed.bind(b, i);
+  b.onmouseup = CamBtnReleased.bind(b, i);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Finally start animation
 animate();
 
 </script>
