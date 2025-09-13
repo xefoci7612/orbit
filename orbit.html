@@ -150,85 +150,129 @@ const EARTH_ROTATION_PERIOD = 23.93447 * SIMULATION_HOUR; // sidereal day
 const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // sidereal year
 const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state orientation
 
+// Helpers to calculate date differences
+function daysSinceStartOfYear(targetDate) {
+  const year = targetDate.getFullYear();
+  const startOfYear = new Date(year, 0, 1); // Months are 0-indexed, so 0 = January
+  return (targetDate - startOfYear) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
+}
+
+// Our reference date is September 10, 2025
+const REFERENCE_DATE = new Date('2025-09-10T00:00:00Z');
+const DAYS_SINCE_SOY = daysSinceStartOfYear(REFERENCE_DATE);
+
 // ============================================================================
 // ORBITAL MECHANICS SETUP
 // ============================================================================
 
-  // helper: multiply 3×3 matrices  C = A · B
-  function mm(A, B) {
-    return A.map((row, i) =>
-      B[0].map((_, j) => row.reduce((s, v, k) => s + v * B[k][j], 0))
-    );
-  }
+// Returns the quaternion that implements the ZXZ rotation sequence given the
+// Euler extrinsic angles. ZXZ rotation can reach any target orientation in 3D space.
+// Rotations are counter-clockwise according to the right-hand rule.
+function ZXZSequence(alpha, beta, gamma) {
 
-  // Calculate the number of days since the start of the year for a given date string
-  function daysSinceStartOfYear(targetDate) {
-    const year = targetDate.getFullYear();
-    const startOfYear = new Date(year, 0, 1); // Months are 0-indexed, so 0 = January
-    return (targetDate - startOfYear) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
-  }
+  // Define the Z and X axis of the initial frame according to THREE conventions
+  const x_axis = new THREE.Vector3(1, 0, 0);
+  const z_axis = new THREE.Vector3(0, 0, 1);
 
-  // Our reference date is September 10, 2025
-  const REFERENCE_DATE = new Date('2025-09-10T00:00:00Z');
-  const DAYS_SINCE_SOY = daysSinceStartOfYear(REFERENCE_DATE);
+  // Define one quaternion (axis + rotation angle) for each rotation
+  const rzA = new THREE.Quaternion().setFromAxisAngle(z_axis, alpha);
+  const rxB = new THREE.Quaternion().setFromAxisAngle(x_axis, beta);
+  const rzG = new THREE.Quaternion().setFromAxisAngle(z_axis, gamma);
 
-  // Orbital parameters constants for September 10, 2025 (from JPL Horizons)
+  // In Three.js Quaternion multiplication applies rotations from
+  // right to left and assumes angles to be intrinsic:
+  //
+  //   multiply(P).multiply(Q) == P * Q -> apply first rotation Q then P
+  //
+  // Our angles α, β, γ are instead extrinsic (refer all to fixed initial
+  // frame), so we use this equivalence:
+  //
+  //       G * B * A (extrinsic) === A * B * G (intrinsic)
+  //
+  // To rotate first by alpha, then by beta, then by gamma the combined ZXZ rotation
+  // is (G * B * A), but THREE.multiply() assumes angles to be intrinsic, so we have
+  // to compute (A * B * G) instead.
+  //
+  // Compute the orientation of the final frame relative to the initial frame
+  // (quaternion rotates the *frame*, not the vector).
+  const InitialToFinal = new THREE.Quaternion().multiply(rzA).multiply(rxB).multiply(rzG);
+
+  // The quaternion that rotates a *vector* from initial frame to final frame
+  // is the inverse of the frame rotation.
+  const R = InitialToFinal.clone().invert();
+
+  return R;
+}
+
+// Compute initial orbital parameters
+function initOrbitalParameters() {
+  /*
+    Init all orbital parameters out of JPL Horizons data for September 10, 2025
+    https://ssd.jpl.nasa.gov/horizons/app.html
+
+    Reference frame : Ecliptic of J2000.0
+
+    Origin: The center of the Earth
+
+    Fundamental Plane: The Earth's mean orbital plane (the ecliptic) as it was at the J2000.0 epoch.
+
+    Z-axis: A line perpendicular to this ecliptic plane, pointing north.
+
+    X-axis: This primary direction points towards the vernal equinox, the point where the Sun crosses
+            the celestial equator from south to north—as it was at the J2000.0 epoch.
+
+    Y-axis: 90° ahead of the X-axis in the direction of Earth's orbit around the Sun.
+  */
+
+  // Orbital elements for the Moon at reference date
   const EC = 0.05212487669881421; // eccentricity
-  const A  = 3.848214581097544e5; // semi-major axis (km)
+  const A  = 384821.4581097544;   // semi-major axis (km)
   const IN = toRadians(5.280240463394533); // inclination relative to ecliptic
-  const OM = toRadians(347.9713278613414); // longitude of ascending node
-  const W  = toRadians(37.57619864565795); // argument of periapsis
+  const OM = toRadians(347.9713278613414); // longitude of the Ascending Node
+  const W  = toRadians(37.57619864565795); // argument of periapsis (perigee)
+  const MA = toRadians(352.7811711299613); // mean anomaly
 
-  // Ecliptic vector (km) for the Moon in J2000.0 Geocentric Ecliptic Coordinates
-  // with origin at Earth's center.
+  // Ecliptic vector (km) for the Moon
   const Xe = 3.087382089986445e5; // X pointing towards vernal equinox
   const Ye = 1.931385895910154e5; // Y 90° ahead in orbit
   const Ze = 2.340431283250813e4; // Z perpendicular to ecliptic plane
-  const moonDistance = toUnits(Math.hypot(Xe, Ye, Ze));
 
-  // Change vector coordinates from elliptic J2000.0 into the Moon's orbital plane.
-  // We need to perform 3 rotations (right-hand rule): R = Rz(Ω) * Rx(i) * Rz(ω)
-  const z_axis = new THREE.Vector3(0, 0, 1);
-  const x_axis = new THREE.Vector3(1, 0, 0);
-  const rzO = new THREE.Quaternion().setFromAxisAngle(z_axis, OM); // Rz(Ω)
-  const rxI = new THREE.Quaternion().setFromAxisAngle(x_axis, IN); // Rx(i)
-  const rzW = new THREE.Quaternion().setFromAxisAngle(z_axis,  W); // Rz(ω)
+  // Change vector coordinates from Ecliptic into the Moon's orbital plane
+  // (perifocal frame) with a ZXZ extrinsic (fixed-axis) rotation.
+  // 1. Rotation of Ω around z-axis (UP) aligns x-axis with Moon orbit Ascending Node
+  // 2. Rotation of IN around x-axis tilts the vector
+  // 3. Rotation of W z-axis aligns x-axis with perigee
+  const EclipticToMoon = ZXZSequence(OM, IN, W);
 
-  // The full rotation transforms coordinates FROM the orbital plane TO the ecliptic plane
-  // To transform a vector FROM ecliptic TO the orbital plane, we need the INVERSE rotation
-  const R_inverse = new THREE.Quaternion().multiply(rzO).multiply(rxI).multiply(rzW).invert();
+  // Apply rotation to get the Moon vector in Moon's orbital plane coordinates
+  const Ve = new THREE.Vector3(Xe, Ye, Ze);
+  const Vm = Ve.clone().applyQuaternion(EclipticToMoon);
+  const Xp = Vm.x; // towards the Moon's perigee
+  const Yp = Vm.y; // 90° ahead in the direction of Moon's motion
+  const Zp = Vm.z; // perpendicular to the orbital plane (should be ~0)
 
-  // Apply rotation to get vector in orbital plane
-  const rJ2000 = new THREE.Vector3(Xe, Ye, Ze);
-  const rOrb = rJ2000.clone().applyQuaternion(R_inverse);
-  const Xp = rOrb.x; // points towards the Ascending Node
-  const Yp = rOrb.y; // points 90° ahead in the direction of motion
-  const Zp = rOrb.z; // points perpendicular to the orbital plane (should be ~0)
+  console.assert(Math.abs(Zp) < 0.1, `Zp should be ~0 in Moon's orbital plane, got ${Zp}`);
 
-  console.assert(Math.abs(Zp) < 0.1, `Zp should be ~0 in orbital plane, got ${Zp}`);
+  // Calculate the true anomaly (angle from perigee)
+  const trueAnomaly = Math.atan2(Yp, Xp);
 
   // Calculate the argument of latitude (angle from ascending node)
-  // In the orbital plane, the ascending node lies along the x-axis
-  const argumentOfLatitude = Math.atan2(Yp, Xp); // counter-clockwise from the ascending node
-
-  // This is now the true longitude of the Moon in its orbit, relative to the ascending node.
-  const moonLongitude = argumentOfLatitude;
+  const argumentOfLatitude = trueAnomaly + W;
 
   // Calculate ellipse geometry
   const semiMajorAxis = toUnits(A);
   const semiMinorAxis = semiMajorAxis * Math.sqrt(1 - EC * EC);
 
-  // The rotation of the EllipseCurve in its local 2D plane should be the argument
-  // of periapsis (W). This orients the long axis of the ellipse correctly
-  // relative to the ascending node (the local x-axis).
-  const perigeeAngle = W;
-
-  // Compute the initial three "Anomalies": True, Eccentric, and Mean
-  const TA0 = moonLongitude - perigeeAngle; // angle from perigee
-  const cosE0 = (EC + Math.cos(TA0)) / (1 + EC * Math.cos(TA0));
-  const sinE0 = Math.sqrt(1 - EC*EC) * Math.sin(TA0) / (1 + EC * Math.cos(TA0));
+  // Compute the Eccentric, and Mean anomaly
+  const cosE0 = (EC + Math.cos(trueAnomaly)) / (1 + EC * Math.cos(trueAnomaly));
+  const sinE0 = Math.sqrt(1 - EC*EC) * Math.sin(trueAnomaly) / (1 + EC * Math.cos(trueAnomaly));
   const E0 = Math.atan2(sinE0, cosE0); // Eccentric Anomaly
-  const initialMeanAnomaly = E0 - EC * Math.sin(E0); // Kepler's Second Law
+  const meanAnomaly = E0 - EC * Math.sin(E0); // Kepler's Second Law
+
+  return [OM, IN, W, toUnits(A), EC, MA]; // Use JPL data
+}
+
+const [MoonOrbRA, MoonOrbInclination, PerigeeAngle, semiMajorAxis, EC, initialMeanAnomaly] = initOrbitalParameters();
 
 // ============================================================================
 // SCENE SETUP
@@ -294,14 +338,14 @@ const initialCameraTarget = controls.target.clone();
 */
 
 // Create the Moon's orbital plane with nested objects to handle rotations
-// Create an object that handles the longitude of the ascending node (OM)
+// Create an object that handles the longitude of the ascending node (RA)
 const nodeObject = new THREE.Object3D();
-nodeObject.rotation.y = OM; // rotation around the 'up' axis (Y)
+nodeObject.rotation.y = MoonOrbRA; // rotation around the 'up' axis (Y)
 scene.add(nodeObject);
 
-// Create an object for the inclination (IN)
+// Create an object for the orbit inclination
 const inclinationObject = new THREE.Object3D();
-inclinationObject.rotation.x = IN; // rotation around the NEW x-axis
+inclinationObject.rotation.x = MoonOrbInclination; // rotation around the NEW x-axis
 nodeObject.add(inclinationObject);
 
 // Create a 2D elliptical curve for the Moon's orbit in its orbital plane
@@ -309,7 +353,7 @@ const SEGMENTS = 360;
 const positions = new Float32Array(SEGMENTS * 3);
 for (let i = 0; i < SEGMENTS; i++) {
   const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
-  const angle = ta + perigeeAngle;         // angle from node
+  const angle = ta + PerigeeAngle;         // angle from node
   const r = semiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
   positions[i*3 + 0] = r * Math.cos(angle); // x
   positions[i*3 + 1] = 0;                   // y  (on orbital plane)
@@ -396,7 +440,7 @@ function getMoonPosition(elapsedTime) {
   const r = semiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
 
   // Calculate position in the orbital plane
-  const angleFromAscendingNode = TA + perigeeAngle; // x-axis is at ascending node
+  const angleFromAscendingNode = TA + PerigeeAngle; // x-axis is at ascending node
   const x = r * Math.cos(angleFromAscendingNode);
   const z = r * Math.sin(angleFromAscendingNode);
   return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
@@ -425,31 +469,28 @@ function animate() {
   elapsedTime += (isPlaying ? speed : 0) * clock.getDelta();
 
   // Rotate Earth
-  earth.rotation.y = elapsedTime * earthRotationSpeed;
+  earth.rotation.y = elapsedTime * earthRotationSpeed + Math.PI;
 
   // Orbit Moon around Earth
   const [x, y, z] = getMoonPosition(elapsedTime);
   moonAxis.position.set(x, y, z);
 
-  // Moon's nodal (retrograde) precession
-  moonAxis.rotation.y = -moonNodeSpeed * elapsedTime;
+  // The Moon's orbital plane precesses backwards (retrograde).
+  // This is a rotation around the Ecliptic Pole (the Y-axis).
+  nodeObject.rotation.y = MoonOrbRA - (moonNodeSpeed * elapsedTime);
 
   // Moon rotation, add 180-degree because Moon texture
   // is centered on 0° longitude (facing earth)
-  moon.rotation.y = moonSiderealRotationSpeed * elapsedTime + Math.PI; // in tidal locking
+  moon.rotation.y = moonSiderealRotationSpeed * elapsedTime - Math.PI/4 + Math.PI; // in tidal locking
 
   // Simulate Sun's (circular) orbit around Earth (for lighting)
-  const sunAngle = sunInitialAngle + elapsedTime * sunOrbitSpeed;
+  const sunAngle = sunInitialAngle - elapsedTime * sunOrbitSpeed; // FIXME
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
-  // Update controls
+  // Update controls and render
   controls.update();
   updateDateTimeUI();
-
-  // Render the scene
   renderer.render(scene, camera);
-
-  // Schedule next update
   requestAnimationFrame(animate);
 }
 
