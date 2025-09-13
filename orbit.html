@@ -147,19 +147,22 @@ const SIMULATION_DAY = 24 * SIMULATION_HOUR;
 const SIMULATION_YEAR = 365.25 * SIMULATION_DAY;
 const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
 const EARTH_ROTATION_PERIOD = 23.93447 * SIMULATION_HOUR; // sidereal day
+const EARTH_PRECESSION_PERIOD = 25772 * SIMULATION_YEAR; // Period in hours
 const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // sidereal year
 const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state orientation
 
 // Helpers to calculate date differences
-function daysSinceStartOfYear(targetDate) {
+function daysSinceSolstice(targetDate) {
   const year = targetDate.getFullYear();
-  const startOfYear = new Date(year, 0, 1); // Months are 0-indexed, so 0 = January
-  return (targetDate - startOfYear) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
+  // The Summer Solstice in 2025 occurs on June 21 at 03:42 UTC.
+  // We use this precise time as our "zero angle" reference point.
+  const solstice = new Date(Date.UTC(year, 5, 21, 3, 42, 0));
+  return (targetDate - solstice) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
 }
 
 // Our reference date is September 10, 2025
 const REFERENCE_DATE = new Date('2025-09-10T00:00:00Z');
-const DAYS_SINCE_SOY = daysSinceStartOfYear(REFERENCE_DATE);
+const DAYS_SINCE_SOLSTICE = daysSinceSolstice(REFERENCE_DATE);
 
 /*
     Init all orbital parameters out of JPL Horizons data for September 10, 2025
@@ -178,7 +181,7 @@ const DAYS_SINCE_SOY = daysSinceStartOfYear(REFERENCE_DATE);
 
     Y-axis: 90° ahead of the X-axis in the direction of Earth's orbit around the Sun.
 */
-const Moon = {
+const MOON = {
   SemiMajorAxis: toUnits(384821.4581097544), // in km
   EC: 0.05212487669881421,          // eccentricity
   IN: toRadians(5.280240463394533), // inclination relative to ecliptic
@@ -190,6 +193,37 @@ const Moon = {
 // ============================================================================
 // SCENE SETUP
 // ============================================================================
+
+/**
+ * Creates a THREE.Line object representing a meridian (a line of longitude).
+ * @param {number} radius The radius of the sphere the line should sit on.
+ * @param {number} longitudeRad The longitude of the meridian in radians (0 for Prime Meridian).
+ * @param {number} segments The number of segments to make the line smooth.
+ * @param {number|string} color The color of the line.
+ * @returns {THREE.Line} The created line object.
+ */
+function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
+  const points = [];
+
+  // Loop from North Pole to South Pole
+  for (let i = 0; i <= segments; i++) {
+    // Interpolate the latitude from +90 degrees to -90 degrees
+    const latRad = Math.PI / 2 - (i / segments) * Math.PI;
+
+    // Calculate the 3D position using spherical coordinates (with Y as up)
+    const x = radius * Math.cos(latRad) * Math.cos(longitudeRad);
+    const y = radius * Math.sin(latRad);
+    const z = radius * Math.cos(latRad) * Math.sin(longitudeRad);
+
+    points.push(new THREE.Vector3(x, y, z));
+  }
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({ color: color, fog: false }); // fog:false keeps it visible from far away
+  const line = new THREE.Line(geometry, material);
+
+  return line;
+}
 
 // Create renderer and scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -241,38 +275,84 @@ const initialCameraTarget = controls.target.clone();
 // CELESTIAL BODY CREATION
 // ============================================================================
 
-/* WARNING: By default Three.js applies rotations in XYZ order. At render time, it
-  constructs a single rotation matrix like:
+/* WARNING: By default Three.js applies rotations in XYZ order. We use nested
+   Object3D containers to apply rotations in a different order.
 
-    M = RotateX(rotation.x) * RotateY(rotation.y) * RotateZ(rotation.z)
-
-  To avoid gimbal lock, we use nested Object3D containers to apply rotations
-  in a different order.
+   Three.js coordinate system is XZ plane and +Y (UP) perpendicular direction
 */
 
-// Create the Moon's orbital plane with nested objects to handle rotations
-// Create an object that handles the longitude of the ascending node (RA)
-const nodeObject = new THREE.Object3D();
-nodeObject.rotation.y = Moon.OM; // rotation around the 'up' axis (Y)
-scene.add(nodeObject);
-
-// Create an object for the orbit inclination
-const inclinationObject = new THREE.Object3D();
-inclinationObject.rotation.x = Moon.IN; // rotation around the NEW x-axis
-nodeObject.add(inclinationObject);
-
-// Create a 2D elliptical curve for the Moon's orbit in its orbital plane
-const SEGMENTS = 360;
-const positions = new Float32Array(SEGMENTS * 3);
-const EC = Moon.EC;
-for (let i = 0; i < SEGMENTS; i++) {
-  const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
-  const angle = ta + Moon.W;         // angle from node
-  const r = Moon.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
-  positions[i*3 + 0] = r * Math.cos(angle); // x
-  positions[i*3 + 1] = 0;                   // y  (on orbital plane)
-  positions[i*3 + 2] = r * Math.sin(angle); // z
+// Computes an array of 3D vertex on an elliptic curve in XZ plane
+function ellipticCurve(SemiMajorAxis, EC, W) {
+  const SEGMENTS = 360;
+  const positions = new Float32Array(SEGMENTS * 3);
+  for (let i = 0; i < SEGMENTS; i++) {
+    const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
+    const angle = ta + W; // angle from ascending node
+    const r = SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+    positions[i*3 + 0] = r * Math.cos(angle); // x
+    positions[i*3 + 1] = 0;                   // y  (on orbital plane)
+    positions[i*3 + 2] = r * Math.sin(angle); // z
+  }
+  return positions;
 }
+
+// Create Earth hierarchy
+// The innermost node performs daily rotations around pole axis
+const textureLoader = new THREE.TextureLoader();
+const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
+const earth = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
+  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
+);
+
+// Add parent to tilt and rotate vertical axis for precession
+const earthAxis = new THREE.Object3D();
+// Set the Earth's obliquity (axial tilt).
+// Our world coordinate system is Ecliptic in Three.js conventions:
+// - Y-axis is the North Ecliptic Pole.
+// - X-axis points towards the Vernal Equinox position.
+//
+// We want to model the seasons, so at the Northern Hemisphere's summer solstice,
+// the North Pole must be tilted towards the Sun. We define this solstice
+// to occur when the Sun is on the positive X-axis.
+//
+// A negative rotation around the Z-axis (by the right-hand rule) correctly
+// tilts the Earth's North Pole (its local +Y) towards the world's +X axis.
+earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
+earthAxis.add(earth);
+
+// Create Moon hierarchy, each node performs at most one rotation
+// Starting from the innermost node, the moon mesh that performs
+// rotation around its axis. Texture map is already centered on
+// 0° longitude.
+const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
+  new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
+);
+
+// Create a bright yellow line to represent the Prime Meridian (0° longitude).
+// We make the radius slightly larger than the Earth's to prevent Z-fighting
+// (where the line flickers because it's at the same depth as the texture).
+const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
+
+// Add the line as a child of the Earth mesh. This ensures it inherits
+// all of the Earth's rotations (both daily spin and axial tilt).
+earth.add(primeMeridianLine);
+
+// Add parent to tilt and rotate vertical axis for precession
+const moonAxis = new THREE.Object3D();
+moonAxis.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
+moonAxis.add(moon);
+
+// Add parent to set a fixed inclined orbital path, this is the target when setting
+// current moon position in animation (through moonAxis object)
+const moonOrbit = new THREE.Object3D();
+moonOrbit.rotation.x = MOON.IN; // inclination to ecliptic
+moonOrbit.add(moonAxis);
+
+// Create an elliptical curve for the Moon's orbit in its orbital plane
+const positions = ellipticCurve(MOON.SemiMajorAxis, MOON.EC, MOON.W)
 const vertexBuffer = new THREE.BufferAttribute(positions, 3);
 const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -280,32 +360,16 @@ const orbitMaterial = new THREE.LineBasicMaterial({
   transparent: true,
   opacity: 0.35
 });
-const orbitLine = new THREE.LineLoop(orbitGeometry, orbitMaterial);
-inclinationObject.add(orbitLine);
+const orbitPath = new THREE.LineLoop(orbitGeometry, orbitMaterial);
+moonOrbit.add(orbitPath);
 
-// Create Moon
-const textureLoader = new THREE.TextureLoader();
+// Add parent to follow the Moon's orbit nodal precession (swivel)
+const ascendingNodePivot = new THREE.Object3D();
+ascendingNodePivot.add(moonOrbit);
 
-const moonAxis = new THREE.Object3D();
-moonAxis.rotation.z = -toRadians(MOON_AXIAL_TILT);
-inclinationObject.add(moonAxis);
-const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
-const moon = new THREE.Mesh(
-  new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
-  new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
-);
-moonAxis.add(moon);
-
-// Create Earth
-const earthAxis = new THREE.Object3D();
-earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
+// Finally add Moon and Earth hierarchy to scene
+scene.add(ascendingNodePivot);
 scene.add(earthAxis);
-const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
-const earth = new THREE.Mesh(
-  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
-  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
-);
-earthAxis.add(earth);
 
 // ============================================================================
 // Kepler's Second Law Solver
@@ -341,8 +405,8 @@ function getMoonPosition(elapsedTime) {
 
   // Calculate current Mean Anomaly (M) and Eccentric Anomaly (E)
   const n = -2 * Math.PI / MOON_ORBITAL_PERIOD; // Mean motion (rad/sec)
-  const M = Moon.MA + n * elapsedTime; // Current Mean Anomaly
-  const EC = Moon.EC;
+  const M = MOON.MA + n * elapsedTime; // Current Mean Anomaly
+  const EC = MOON.EC;
   const E = solveKepler(M, EC); // Kepler's Second Law
 
   // Calculate the current True Anomaly (TA or ν), the real angle from perigee
@@ -352,10 +416,10 @@ function getMoonPosition(elapsedTime) {
   const TA = Math.atan2(sinTA, cosTA);
 
   // Calculate distance from Earth (focus)
-  const r = Moon.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
+  const r = MOON.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
 
   // Calculate position in the orbital plane
-  const angleFromAscendingNode = TA + Moon.W; // x-axis is at ascending node
+  const angleFromAscendingNode = TA + MOON.W; // x-axis is at ascending node
   const x = r * Math.cos(angleFromAscendingNode);
   const z = r * Math.sin(angleFromAscendingNode);
   return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
@@ -367,13 +431,14 @@ function getMoonPosition(elapsedTime) {
 
 // Calculate simulation constants and state
 const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
-const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
+const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
 const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
-const sunInitialAngle = (DAYS_SINCE_SOY / 365.25) * 2 * Math.PI;
+const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
+const sunInitialAngle = (DAYS_SINCE_SOLSTICE / 365.25) * 2 * Math.PI;
+const earthInitialAngle = 8 * 2 * Math.PI / 24; // FIXME
 
 const clock = new THREE.Clock();
-const TZ_OFFSET = 2; // UTC+2
 let isPlaying   = true;
 let speed       = 1; // 1 = 1 sec real-time ↔ 1 h sim-time
 let elapsedTime = 0; // 1 second real time = 1 hour sim time
@@ -384,22 +449,26 @@ function animate() {
   elapsedTime += (isPlaying ? speed : 0) * clock.getDelta();
 
   // Rotate Earth
-  earth.rotation.y = elapsedTime * earthRotationSpeed + Math.PI;
+  earth.rotation.y = earthInitialAngle  + elapsedTime * earthRotationSpeed;
 
-  // Orbit Moon around Earth
+  // Earth axial precession (at t = 0 inclination is aligned toward Sun at solstice)
+  earthAxis.rotation.y = precessionSpeed * elapsedTime;
+
+  // Moon rotation around its axis, in tidal locking with Earth
+  // Offset 180-degree because texture is centered on 0° longitude (facing earth)
+  moon.rotation.y = Math.PI + moonSiderealRotationSpeed * elapsedTime;
+
+  // Moon orbit around Earth
   const [x, y, z] = getMoonPosition(elapsedTime);
   moonAxis.position.set(x, y, z);
 
   // The Moon's orbital plane precesses backwards (retrograde).
   // This is a rotation around the Ecliptic Pole (the Y-axis).
-  nodeObject.rotation.y = Moon.OM - (moonNodeSpeed * elapsedTime);
+  ascendingNodePivot.rotation.y = MOON.OM - moonNodeSpeed * elapsedTime;
 
-  // Moon rotation, add 180-degree because Moon texture
-  // is centered on 0° longitude (facing earth)
-  moon.rotation.y = moonSiderealRotationSpeed * elapsedTime - Math.PI/4 + Math.PI; // in tidal locking
-
-  // Simulate Sun's (circular) orbit around Earth (for lighting)
-  const sunAngle = sunInitialAngle - elapsedTime * sunOrbitSpeed; // FIXME
+  // Simulate Sun's (circular) prograde orbit around Earth for lighting
+  // The angle (=0 at summer solstice) increases for a counter-clockwise orbit
+  const sunAngle = sunInitialAngle + elapsedTime * sunOrbitSpeed;
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
   // Update controls and render
