@@ -14,6 +14,9 @@
       --color-border-light: rgba(255,255,255,.25);
       --color-background: rgba(0,0,0,.35);
       --color-orbit: #4488ff;
+      /* Opacity definitions */
+      --opacity-disabled: 0.35;
+      --opacity-enabled: 1;
     }
     body {
       margin: 0;
@@ -55,9 +58,21 @@
     #speedOut { width: 58px; text-align: right; }
     /* camera row */
     .hud__cam { justify-content: flex-start; gap: 6px; }
-    .camBtn { width: 32px; }
+    .camBtn { width: 32px; opacity: var(--opacity-disabled); }
+    .camBtn.saved { opacity: var(--opacity-enabled); }
     #camStore { margin-left: auto; margin-right: 6px; }
     #camClose { background: none; border: none; opacity: .7; }
+    /* lock indicator */
+    #linkIndicator {
+      display: none;
+      font-size: 16px;
+      padding: 4px 6px;
+      background: transparent;
+      border: none;
+    }
+    #linkIndicator.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -81,7 +96,7 @@
 
     <!-- RIGHT -->
     <div class="hud__group">
-      <input id="speedSlider" type="range" min="0" max="10" step="1" value="1">
+      <input id="speedSlider" type="range" min="0" max="50" step="0.5" value="1">
       <output id="speedOut" for="speedSlider">1 ×</output>
     </div>
   </div>
@@ -91,6 +106,7 @@
     <button class="camBtn" data-slot="1">1</button>
     <button class="camBtn" data-slot="2">2</button>
     <button class="camBtn" data-slot="3">3</button>
+    <div id="linkIndicator" title="Camera linked">🔒</div>
   </div>
 </div>
 
@@ -142,7 +158,8 @@ const EARTH_AXIAL_TILT = 23.44; // degrees
 const MOON_AXIAL_TILT = 6.68; // degrees
 
 // Time constants for simulation
-const SIMULATION_HOUR = 1; // 1 second of real time represents 1 hour in simulation
+const SIMULATION_MINUTE = 1;  // 1 minute of real time represents 1 hour in simulation
+const SIMULATION_HOUR = 60 * SIMULATION_MINUTE;
 const SIMULATION_DAY = 24 * SIMULATION_HOUR;
 const SIMULATION_YEAR = 365.25 * SIMULATION_DAY;
 const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
@@ -260,6 +277,7 @@ camera.position.set(
   cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)  // z
 );
 camera.lookAt(0, 0, 0); // Point camera at Earth center
+scene.add(camera);
 
 // Setup camera controls
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -270,6 +288,93 @@ controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
 // Store initial camera position and target
 const initialCameraPosition = camera.position.clone();
 const initialCameraTarget = controls.target.clone();
+
+// Tracks state for camera lock-to-target behavior
+const Lock = {
+  active: false, // true when camera is locked to a target
+  candidates: [], // objects that can be locked
+  lockedObj: null, // object we currently track
+  prevPosition: new THREE.Vector3(), // obj world position last frame
+  prevOrientation: new THREE.Quaternion(), // obj world orientation last frame
+  tempVec: new THREE.Vector3(), // helper to avoids re-allocations
+  tempQuat: new THREE.Quaternion(), // helper quaternion
+};
+
+// Returns first clickable candidate under mouse, or null
+function getClickedCandidate(mouseX, mouseY) {
+
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+
+  // Convert mouse position to normalized device coordinates (-1 to +1)
+  mouse.x =  (mouseX / window.innerWidth)  * 2 - 1;
+  mouse.y = -(mouseY / window.innerHeight) * 2 + 1;
+
+  // Update the raycaster with the camera and mouse position
+  raycaster.setFromCamera(mouse, camera);
+
+  // Find intersections with candidates
+  const intersects = raycaster.intersectObjects(Lock.candidates);
+  return intersects.length > 0 ? intersects[0].object : null;
+}
+
+function unlockCamera() {
+  Lock.lockedObj = null;
+  Lock.active = false;
+}
+
+// Locks the camera into a geostationary orbit around the selected object
+function lockCameraTo(objectToLock) {
+
+  if (!objectToLock.geometry.parameters || objectToLock.geometry.parameters.radius === undefined) {
+    console.error("Object to lock must be a THREE.Mesh with a THREE.SphereGeometry.");
+    return;
+  }
+
+  Lock.lockedObj = objectToLock;
+
+  // Initialize the "previous" world state
+  Lock.lockedObj.getWorldPosition(Lock.prevPosition);
+  Lock.lockedObj.getWorldQuaternion(Lock.prevOrientation);
+
+  // Center camera on target for better UX (user can still pan after)
+  const objCenter = Lock.prevPosition;
+  controls.target.copy(objCenter);
+
+  controls.update();
+  Lock.active = true;
+}
+
+function updateCameraLock() {
+
+  console.assert(Lock.lockedObj, "Called update lock with no locked object");
+
+  // Get current target transform
+  const currentWorldPos = Lock.lockedObj.getWorldPosition(Lock.tempVec);
+  const currentWorldQuat = Lock.lockedObj.getWorldQuaternion(Lock.tempQuat);
+
+  // Compute transform delta since last frame
+  const translationDelta = currentWorldPos.clone().sub(Lock.prevPosition);
+  const rotationDelta = currentWorldQuat.clone().multiply(Lock.prevOrientation.clone().invert());
+
+  // Cache current transform for next frame’s delta
+  Lock.prevPosition.copy(currentWorldPos);
+  Lock.prevOrientation.copy(currentWorldQuat);
+
+  // Capture the camera's current relationship to its target (this preserves user input)
+  const targetToCamera = camera.position.clone().sub(controls.target);
+
+  // Apply rotation on the target-to-camera vector
+  targetToCamera.applyQuaternion(rotationDelta);
+
+  // Apply translation to target to preserve user pan
+  controls.target.add(translationDelta);
+
+  // Recompute camera position from updated target + preserved offset
+  camera.position.copy(controls.target).add(targetToCamera);
+
+  controls.update();
+}
 
 // ============================================================================
 // CELESTIAL BODY CREATION
@@ -304,6 +409,7 @@ const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
   new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
 );
+Lock.candidates.push(earth);
 
 // Add parent to tilt and rotate vertical axis for precession
 const earthAxis = new THREE.Object3D();
@@ -344,6 +450,7 @@ earth.add(primeMeridianLine);
 const moonAxis = new THREE.Object3D();
 moonAxis.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
 moonAxis.add(moon);
+Lock.candidates.push(moon);
 
 // Add parent to set a fixed inclined orbital path, this is the target when setting
 // current moon position in animation (through moonAxis object)
@@ -471,6 +578,9 @@ function animate() {
   const sunAngle = sunInitialAngle + elapsedTime * sunOrbitSpeed;
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
+  if (Lock.active)
+    updateCameraLock();
+
   // Update controls and render
   controls.update();
   updateDateTimeUI();
@@ -493,6 +603,7 @@ const speedOut = document.getElementById('speedOut');
 const camRow   = document.getElementById('camRow');
 const camStore = document.getElementById('camStore');
 const camClose = document.getElementById('camClose');
+const linkIcon = document.getElementById('linkIndicator');
 
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 19);
@@ -508,7 +619,6 @@ function updateDateTimeUI() {
 function dateTimeChanged() {
   const d = new Date(dateInp.value+'T'+timeInp.value+'Z');
   elapsedTime = (d - REFERENCE_DATE) / (3600 * 1000);
-  console.log({d, elapsedTime});
   updateDateTimeUI();
 }
 
@@ -524,6 +634,20 @@ function speedChanged() {
   const sliderValue = Number(speedSl.value);
   speed = sign * (sliderValue * sliderValue); // power of 2 scaling
   updateSpeedUI();
+};
+
+function sceneDoubleClicked(mouseX, mouseY) {
+  const obj = getClickedCandidate(mouseX, mouseY);
+  if (!obj)
+    return;
+  // Clicked again on the locked object?
+  if (Lock.active && obj === Lock.lockedObj) {
+    unlockCamera();
+    linkIcon.classList.remove('active');
+  } else {
+    lockCameraTo(obj); // will unlock any previous lock
+    linkIcon.classList.add('active');
+  }
 };
 
 dateInp.onchange = dateTimeChanged;
@@ -553,7 +677,9 @@ resBtn.onclick = ()=>{
 };
 
 const CAM_KEY = 'orbitCamSlots';
-let slots = JSON.parse(localStorage.getItem(CAM_KEY) || '[]');
+// Clear localStorage at startup (treat like session storage)
+localStorage.removeItem(CAM_KEY);
+let slots = [];
 let pressedSlotIndex = null;
 let clickTimer = null;
 
@@ -582,7 +708,7 @@ function CamBtnReleased(slotIndex) {
   if (longClick) {
     slots[slotIndex] = null;
     localStorage.setItem(CAM_KEY, JSON.stringify(slots));
-    this.style.opacity = '.35';
+    this.classList.remove('saved');
   } else {
     // Normal click: either save or restore camera
     // according if slot is empty or not
@@ -596,7 +722,7 @@ function CamBtnReleased(slotIndex) {
       };
       slots[slotIndex] = slot;
       localStorage.setItem(CAM_KEY, JSON.stringify(slots));
-      this.style.opacity = '1';
+      this.classList.add('saved');
     }
   }
 }
@@ -605,6 +731,10 @@ function CamBtnReleased(slotIndex) {
 document.querySelectorAll('.camBtn').forEach((b,i)=>{
   b.onmousedown = CamBtnPressed.bind(b, i);
   b.onmouseup = CamBtnReleased.bind(b, i);
+});
+
+addEventListener('dblclick', (event) => {
+  sceneDoubleClicked(event.clientX, event.clientY);
 });
 
 addEventListener('resize', () => {
