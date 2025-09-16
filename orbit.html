@@ -242,6 +242,12 @@ function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xf
   return line;
 }
 
+// A small sphere at the clicked point
+const marker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.1),
+  new THREE.MeshBasicMaterial({ color: 0x00ff00 }) // Lime
+);
+
 // Create renderer and scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -280,9 +286,10 @@ camera.lookAt(0, 0, 0); // Point camera at Earth center
 scene.add(camera);
 
 // Setup camera controls
+const DEFAULT_MIN_DISTANCE = toUnits(1.2 * EARTH_RADIUS_KM);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.minDistance = toUnits(2 * EARTH_RADIUS_KM); // From Earth center
+controls.minDistance = DEFAULT_MIN_DISTANCE;
 controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
 
 // Store initial camera position and target
@@ -315,22 +322,31 @@ function getClickedCandidate(mouseX, mouseY) {
 
   // Find intersections with candidates
   const intersects = raycaster.intersectObjects(Lock.candidates);
-  return intersects.length > 0 ? intersects[0].object : null;
+  if (intersects.length === 0)
+    return null;
+
+  return {
+    object: intersects[0].object,
+    point: intersects[0].point // point on the surface in world space
+  };
 }
 
 function unlockCamera() {
+  Lock.lockedObj.remove(marker);
+  controls.minDistance = DEFAULT_MIN_DISTANCE;
   Lock.lockedObj = null;
   Lock.active = false;
 }
 
 // Locks the camera into a geostationary orbit around the selected object
-function lockCameraTo(objectToLock) {
+function lockCameraTo(objectToLock, surfacePoint) {
 
   if (!objectToLock.geometry.parameters || objectToLock.geometry.parameters.radius === undefined) {
     console.error("Object to lock must be a THREE.Mesh with a THREE.SphereGeometry.");
     return;
   }
 
+  Lock.active = true;
   Lock.lockedObj = objectToLock;
 
   // Initialize the "previous" world state
@@ -338,11 +354,22 @@ function lockCameraTo(objectToLock) {
   Lock.lockedObj.getWorldQuaternion(Lock.prevOrientation);
 
   // Center camera on target for better UX (user can still pan after)
-  const objCenter = Lock.prevPosition;
+  const objCenter = Lock.prevPosition.clone();
   controls.target.copy(objCenter);
+  const radius = Lock.lockedObj.geometry.parameters.radius
+  controls.minDistance = radius * 1.2;
+
+  // Reposition camera along center-surface vector, same distance
+  const distanceToCenter = camera.position.distanceTo(objCenter);
+  const direction = Lock.tempVec.subVectors(surfacePoint, objCenter).normalize();
+  camera.position.copy(direction.multiplyScalar(distanceToCenter)).add(objCenter);
+
+  // Show a marker on the clicked point
+  marker.position.copy(surfacePoint);
+  Lock.lockedObj.worldToLocal(marker.position);
+  Lock.lockedObj.add(marker);
 
   controls.update();
-  Lock.active = true;
 }
 
 function updateCameraLock() {
@@ -372,7 +399,14 @@ function updateCameraLock() {
 
   // Recompute camera position from updated target + preserved offset
   camera.position.copy(controls.target).add(targetToCamera);
+}
 
+function flipTarget() {
+  if (!Lock.active)
+    return;
+
+  // Flip target 180°: T' = C - (T - C)
+  controls.target.sub(camera.position).negate().add(camera.position);
   controls.update();
 }
 
@@ -444,7 +478,7 @@ const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
 
 // Add the line as a child of the Earth mesh. This ensures it inherits
 // all of the Earth's rotations (both daily spin and axial tilt).
-earth.add(primeMeridianLine);
+//earth.add(primeMeridianLine);
 
 // Add parent to tilt and rotate vertical axis for precession
 const moonAxis = new THREE.Object3D();
@@ -637,15 +671,15 @@ function speedChanged() {
 };
 
 function sceneDoubleClicked(mouseX, mouseY) {
-  const obj = getClickedCandidate(mouseX, mouseY);
-  if (!obj)
+  const target = getClickedCandidate(mouseX, mouseY);
+  if (!target)
     return;
-  // Clicked again on the locked object?
-  if (Lock.active && obj === Lock.lockedObj) {
+  // Clicked again on the already locked object?
+  if (Lock.active && target.object === Lock.lockedObj) {
     unlockCamera();
     linkIcon.classList.remove('active');
   } else {
-    lockCameraTo(obj); // will unlock any previous lock
+    lockCameraTo(target.object, target.point);
     linkIcon.classList.add('active');
   }
 };
@@ -735,6 +769,14 @@ document.querySelectorAll('.camBtn').forEach((b,i)=>{
 
 addEventListener('dblclick', (event) => {
   sceneDoubleClicked(event.clientX, event.clientY);
+});
+
+// Add keyboard listener for CTRL+F to flip 180 degrees controls target
+addEventListener('keydown', (event) => {
+  if (event.ctrlKey && event.key === 'f') {
+    event.preventDefault(); // Prevent browser's default find functionality
+    flipTarget();
+  }
 });
 
 addEventListener('resize', () => {
