@@ -123,8 +123,7 @@
 
 /*
   TODO:
-    - highlight orbital nodes, perigee, apogee
-    - Add stars background
+    - When locked reset return to "at lock time" position
 */
 
 import * as THREE from 'three';
@@ -211,14 +210,7 @@ const MOON = {
 // SCENE SETUP
 // ============================================================================
 
-/**
- * Creates a THREE.Line object representing a meridian (a line of longitude).
- * @param {number} radius The radius of the sphere the line should sit on.
- * @param {number} longitudeRad The longitude of the meridian in radians (0 for Prime Meridian).
- * @param {number} segments The number of segments to make the line smooth.
- * @param {number|string} color The color of the line.
- * @returns {THREE.Line} The created line object.
- */
+// Creates line object representing a meridian (a line of longitude)
 function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
   const points = [];
 
@@ -420,19 +412,31 @@ function flipTarget() {
    Three.js coordinate system is XZ plane and +Y (UP) perpendicular direction
 */
 
-// Computes an array of 3D vertex on an elliptic curve in XZ plane
+// Computes an array of 3D vertex on an elliptic curve in XZ plane with
+// Earth at (0,0,0). The local X-axis represents the "line of nodes,"
+// and the positive direction (+X, 0, 0) points directly at the ascending node.
 function ellipticCurve(SemiMajorAxis, EC, W) {
   const SEGMENTS = 360;
-  const positions = new Float32Array(SEGMENTS * 3);
+  const points = new Float32Array(SEGMENTS * 3);
+
+  // Distance from Earth given true anomaly ta (ellipse polar equation)
+  const distance = ta => SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+
+  // Loop starts at perigee (W) when i = 0, and angle 0 (ta = -W)
+  // corresponds to the ascending node.
   for (let i = 0; i < SEGMENTS; i++) {
     const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
+    const r = distance(ta); // distance from Earth at true anomaly
     const angle = ta + W; // angle from ascending node
-    const r = SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
-    positions[i*3 + 0] = r * Math.cos(angle); // x
-    positions[i*3 + 1] = 0;                   // y  (on orbital plane)
-    positions[i*3 + 2] = r * Math.sin(angle); // z
+    points[i*3 + 0] = r * Math.cos(angle); // x
+    points[i*3 + 1] = 0;                   // y  (on orbital plane)
+    points[i*3 + 2] = r * Math.sin(angle); // z
   }
-  return positions;
+
+  // Find ascending and descending nodes x-axis coordinates
+  const rAsc = distance(-W);
+  const rDes = distance(-W + Math.PI);
+  return [points, rAsc, rDes];
 }
 
 // Create Earth hierarchy
@@ -493,8 +497,8 @@ moonOrbit.rotation.x = MOON.IN; // inclination to ecliptic
 moonOrbit.add(moonAxis);
 
 // Create an elliptical curve for the Moon's orbit in its orbital plane
-const positions = ellipticCurve(MOON.SemiMajorAxis, MOON.EC, MOON.W)
-const vertexBuffer = new THREE.BufferAttribute(positions, 3);
+const [points, rAsc, rDes] = ellipticCurve(MOON.SemiMajorAxis, MOON.EC, MOON.W);
+const vertexBuffer = new THREE.BufferAttribute(points, 3);
 const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
 const orbitMaterial = new THREE.LineBasicMaterial({
   color: 0x4488ff, // light blue
@@ -503,6 +507,18 @@ const orbitMaterial = new THREE.LineBasicMaterial({
 });
 const orbitPath = new THREE.LineLoop(orbitGeometry, orbitMaterial);
 moonOrbit.add(orbitPath);
+
+// Setup the node markers corresponding to ascending/descending nodes
+function getMarker(color, position) {
+  const geometry = new THREE.SphereGeometry(toUnits(1000));
+  const material = new THREE.MeshBasicMaterial({ color: color });
+  const marker = new THREE.Mesh(geometry, material);
+  marker.position.set(...position);
+  return marker;
+}
+// Nodes lay on x-axis in local coordinates
+moonOrbit.add(getMarker(0xff00ff, [+rAsc, 0, 0])); // Magenta
+moonOrbit.add(getMarker(0xffff00, [-rDes, 0, 0])); // Yellow
 
 // Add parent to follow the Moon's orbit nodal precession (swivel)
 const ascendingNodePivot = new THREE.Object3D();
