@@ -114,7 +114,7 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "camera-controls": "https://cdn.jsdelivr.net/npm/camera-controls@latest/dist/camera-controls.module.js"
+    "orbitControls": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js"
   }
 }
 </script>
@@ -128,8 +128,7 @@
 */
 
 import * as THREE from 'three';
-import CameraControls from 'camera-controls';
-CameraControls.install( { THREE: THREE } ); // Install for THREE namespace
+import { OrbitControls } from 'orbitControls';
 
 // ============================================================================
 // CONSTANTS AND HELPER FUNCTIONS
@@ -281,14 +280,14 @@ camera.lookAt(0, 0, 0); // Point camera at Earth center
 scene.add(camera);
 
 // Setup camera controls
-const controls = new CameraControls(camera, renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
 controls.minDistance = toUnits(2 * EARTH_RADIUS_KM); // From Earth center
 controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
 
 // Store initial camera position and target
 const initialCameraPosition = camera.position.clone();
-const initialCameraTarget = new THREE.Vector3(); // Create an empty vector
-controls.getTarget(initialCameraTarget); // Populate it with the control's current target
+const initialCameraTarget = controls.target.clone();
 
 // Tracks state for camera lock-to-target behavior
 const Lock = {
@@ -340,8 +339,9 @@ function lockCameraTo(objectToLock) {
 
   // Center camera on target for better UX (user can still pan after)
   const objCenter = Lock.prevPosition;
-  controls.setTarget(objCenter.x, objCenter.y, objCenter.z, true);
+  controls.target.copy(objCenter);
 
+  controls.update();
   Lock.active = true;
 }
 
@@ -362,22 +362,18 @@ function updateCameraLock() {
   Lock.prevOrientation.copy(currentWorldQuat);
 
   // Capture the camera's current relationship to its target (this preserves user input)
-  const currentTarget = new THREE.Vector3();
-  controls.getTarget(currentTarget);
-  const targetToCamera = camera.position.clone().sub(currentTarget);
+  const targetToCamera = camera.position.clone().sub(controls.target);
 
   // Apply rotation on the target-to-camera vector
   targetToCamera.applyQuaternion(rotationDelta);
 
   // Apply translation to target to preserve user pan
-  const newTarget = currentTarget.clone().add(translationDelta);
+  controls.target.add(translationDelta);
 
   // Recompute camera position from updated target + preserved offset
-  const newCameraPosition = newTarget.clone().add(targetToCamera);
+  camera.position.copy(controls.target).add(targetToCamera);
 
-  // Update controls
-  controls.setTarget(newTarget.x, newTarget.y, newTarget.z, false);
-  controls.setPosition(newCameraPosition.x, newCameraPosition.y, newCameraPosition.z, false);
+  controls.update();
 }
 
 // ============================================================================
@@ -557,8 +553,7 @@ let elapsedTime = 0; // 1 second real time = 1 hour sim time
 // Animation loop function
 function animate() {
 
-  const delta = clock.getDelta();
-  elapsedTime += (isPlaying ? speed : 0) * delta;
+  elapsedTime += (isPlaying ? speed : 0) * clock.getDelta();
 
   // Rotate Earth
   earth.rotation.y = earthInitialAngle  + elapsedTime * earthRotationSpeed;
@@ -587,7 +582,7 @@ function animate() {
     updateCameraLock();
 
   // Update controls and render
-  controls.update(delta);
+  controls.update();
   updateDateTimeUI();
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
@@ -676,18 +671,9 @@ resBtn.onclick = ()=>{
   updateDateTimeUI();
   updateSpeedUI();
 
-  controls.setPosition(
-    initialCameraPosition.x,
-    initialCameraPosition.y,
-    initialCameraPosition.z,
-    false // instant transaction
-  );
-  controls.setTarget(
-    initialCameraTarget.x,
-    initialCameraTarget.y,
-    initialCameraTarget.z,
-    false
-  );
+  camera.position.copy(initialCameraPosition);
+  controls.target.copy(initialCameraTarget);
+  controls.update();
 };
 
 const CAM_KEY = 'orbitCamSlots';
@@ -697,9 +683,10 @@ let slots = [];
 let pressedSlotIndex = null;
 let clickTimer = null;
 
-function setCameraView({pos, target}) {
-  controls.setPosition(pos[0], pos[1], pos[2], false);
-  controls.setTarget(target[0], target[1], target[2], false);
+function setCameraView({pos, target}){
+  camera.position.set(...pos);
+  controls.target.set(...target);
+  controls.update();
 }
 
 function CamBtnPressed(slotIndex) {
@@ -729,11 +716,9 @@ function CamBtnReleased(slotIndex) {
     if (slot) {
       setCameraView(slot);
     } else {
-      const target = new THREE.Vector3();
-      controls.getTarget(target);
       const slot = {
         pos: camera.position.toArray(),
-        target: target.toArray()
+        target: controls.target.toArray()
       };
       slots[slotIndex] = slot;
       localStorage.setItem(CAM_KEY, JSON.stringify(slots));
