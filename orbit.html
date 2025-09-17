@@ -157,8 +157,8 @@ const EARTH_AXIAL_TILT = 23.44; // degrees
 const MOON_AXIAL_TILT = 6.68; // degrees
 
 // Time constants for simulation
-const SIMULATION_MINUTE = 1;  // 1 minute of real time represents 1 hour in simulation
-const SIMULATION_HOUR = 60 * SIMULATION_MINUTE;
+const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
+const SIMULATION_HOUR = 3600; // in seconds
 const SIMULATION_DAY = 24 * SIMULATION_HOUR;
 const SIMULATION_YEAR = 365.25 * SIMULATION_DAY;
 const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
@@ -210,30 +210,6 @@ const MOON = {
 // SCENE SETUP
 // ============================================================================
 
-// Creates line object representing a meridian (a line of longitude)
-function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
-  const points = [];
-
-  // Loop from North Pole to South Pole
-  for (let i = 0; i <= segments; i++) {
-    // Interpolate the latitude from +90 degrees to -90 degrees
-    const latRad = Math.PI / 2 - (i / segments) * Math.PI;
-
-    // Calculate the 3D position using spherical coordinates (with Y as up)
-    const x = radius * Math.cos(latRad) * Math.cos(longitudeRad);
-    const y = radius * Math.sin(latRad);
-    const z = radius * Math.cos(latRad) * Math.sin(longitudeRad);
-
-    points.push(new THREE.Vector3(x, y, z));
-  }
-
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color: color, fog: false }); // fog:false keeps it visible from far away
-  const line = new THREE.Line(geometry, material);
-
-  return line;
-}
-
 // A small sphere at the clicked point
 const marker = new THREE.Mesh(
   new THREE.SphereGeometry(0.1),
@@ -255,7 +231,7 @@ scene.add(ambientLight);
 // Directional light to simulate sunlight
 const sunLight = new THREE.DirectionalLight(0xffffff, 1);
 const sunDistance = toUnits(100 * MOON_DISTANCE_KM);
-sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane
+sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane +X axis
 sunLight.lookAt(0, 0, 0);
 scene.add(sunLight);
 
@@ -409,7 +385,7 @@ function flipTarget() {
 /* WARNING: By default Three.js applies rotations in XYZ order. We use nested
    Object3D containers to apply rotations in a different order.
 
-   Three.js coordinate system is XZ plane and +Y (UP) perpendicular direction
+   Three.js coordinate system is +X right, +Y up, +Z toward camera
 */
 
 // Computes an array of 3D vertex on an elliptic curve in XZ plane with
@@ -441,6 +417,7 @@ function ellipticCurve(SemiMajorAxis, EC, W) {
 
 // Create Earth hierarchy
 // The innermost node performs daily rotations around pole axis
+// Earth texture map is already centered on 0° longitude.
 const textureLoader = new THREE.TextureLoader();
 const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
 const earth = new THREE.Mesh(
@@ -452,16 +429,10 @@ Lock.candidates.push(earth);
 // Add parent to tilt and rotate vertical axis for precession
 const earthAxis = new THREE.Object3D();
 // Set the Earth's obliquity (axial tilt).
-// Our world coordinate system is Ecliptic in Three.js conventions:
-// - Y-axis is the North Ecliptic Pole.
-// - X-axis points towards the Vernal Equinox position.
-//
-// We want to model the seasons, so at the Northern Hemisphere's summer solstice,
-// the North Pole must be tilted towards the Sun. We define this solstice
-// to occur when the Sun is on the positive X-axis.
-//
-// A negative rotation around the Z-axis (by the right-hand rule) correctly
-// tilts the Earth's North Pole (its local +Y) towards the world's +X axis.
+// At summer solstice the North Pole must be tilted towards the Sun.
+// In Three.js coordinate system (+X right, +Y up, +Z toward camera),
+// when Sun is on the +X axis, a negative (clockwise) rotation around
+// the Z-axis correctly tilts the Earth's North Pole towards the sun.
 earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
 earthAxis.add(earth);
 
@@ -474,15 +445,6 @@ const moon = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
   new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
 );
-
-// Create a bright yellow line to represent the Prime Meridian (0° longitude).
-// We make the radius slightly larger than the Earth's to prevent Z-fighting
-// (where the line flickers because it's at the same depth as the texture).
-const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
-
-// Add the line as a child of the Earth mesh. This ensures it inherits
-// all of the Earth's rotations (both daily spin and axial tilt).
-//earth.add(primeMeridianLine);
 
 // Add parent to tilt and rotate vertical axis for precession
 const moonAxis = new THREE.Object3D();
@@ -593,17 +555,62 @@ const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
 const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
 const sunInitialAngle = (DAYS_SINCE_SOLSTICE / 365.25) * 2 * Math.PI;
-const earthInitialAngle = 8 * 2 * Math.PI / 24; // FIXME
+// Prime meridian is at midnight at solstice 00:00
+const earthInitialAngle = sunInitialAngle + Math.PI;
 
-const clock = new THREE.Clock();
-let isPlaying   = true;
-let speed       = 1; // 1 = 1 sec real-time ↔ 1 h sim-time
-let elapsedTime = 0; // 1 second real time = 1 hour sim time
+// Clock works also when tab is hidden, can be set/reset by UI, time
+// can run faster and/or backward from real time and is adjustable
+const Clock = class {
+  constructor() {
+    this.running = true;
+    this.referenceTime = REFERENCE_DATE.getTime(); // fixed t=0 point
+    this.reset();
+  }
+  reset() {
+    this.simulationTime = this.referenceTime;
+    this.realTimeAtResume = Date.now();
+    this.speedX = SIM_TIME_SPEED_UP;
+  }
+  _deltaSinceLastResume() {
+    // Accumulate time only while running. It is simulation time, not real time
+    return this.running ? this.speedX * (Date.now() - this.realTimeAtResume) : 0;
+  }
+  elapsedTime() {
+    const simTime = this.simulationTime + this._deltaSinceLastResume();
+    return (simTime - this.referenceTime) / 1000; // in secs
+  }
+  togglePause() {
+    if (this.running) {
+      // Before stopping, add the "ticking" time to the "banked" time
+      this.simulationTime += this._deltaSinceLastResume();
+    } else {
+      this.realTimeAtResume = Date.now();
+    }
+    this.running = !this.running;
+    return this.running;
+  }
+  speed() {
+    return this.speedX / SIM_TIME_SPEED_UP; // SIM_TIME_SPEED_UP -> 1
+  }
+  setSpeed(speed) {
+    // Banks any accumulated time at the old speed by simulating a
+    // stop/start, then sets the new speed. It works whether the
+    // clock is running or paused.
+    this.togglePause();
+    this.togglePause();
+    this.speedX = SIM_TIME_SPEED_UP * speed; // 1 -> SIM_TIME_SPEED_UP
+  }
+  setDate(newDate) {
+    // Adjust the "banked" time to make the total time equal the newDate
+    this.simulationTime = newDate.getTime() - this._deltaSinceLastResume();
+  }
+};
+const simClock = new Clock();
 
 // Animation loop function
 function animate() {
 
-  elapsedTime += (isPlaying ? speed : 0) * clock.getDelta();
+  const elapsedTime = simClock.elapsedTime(); // in seconds
 
   // Rotate Earth
   earth.rotation.y = earthInitialAngle  + elapsedTime * earthRotationSpeed;
@@ -623,9 +630,11 @@ function animate() {
   // This is a rotation around the Ecliptic Pole (the Y-axis).
   ascendingNodePivot.rotation.y = MOON.OM - moonNodeSpeed * elapsedTime;
 
-  // Simulate Sun's (circular) prograde orbit around Earth for lighting
-  // The angle (=0 at summer solstice) increases for a counter-clockwise orbit
-  const sunAngle = sunInitialAngle + elapsedTime * sunOrbitSpeed;
+  // The sun's orbital motion is counter-clockwise when viewed from above (positive Y)
+  // In Three.js coordinate system (+X right, +Y up, +Z toward camera).
+  // So a counter-clockwise rotation requires the sun to move from positive +X toward
+  // negative -Z and angle will decrease with time.
+  const sunAngle = -(sunInitialAngle + elapsedTime * sunOrbitSpeed);
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
   if (Lock.active)
@@ -659,30 +668,36 @@ const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 19);
 
 function updateDateTimeUI() {
-  const elapsedMsec = elapsedTime * 3600 * 1000; // hours to ms
+  const elapsedMsec = simClock.elapsedTime() * 1000;
+  const elapsedDays = elapsedMsec / (24 * 3600 * 1000);
   const cur = new Date(REFERENCE_DATE.getTime() + elapsedMsec);
   dateInp.value = toDateStr(cur);
   timeInp.value = toTimeStr(cur);
-  elapsedS.textContent = (elapsedTime / 24).toFixed(1)+' d';
+  elapsedS.textContent = (elapsedDays).toFixed(1)+' d';
 }
 
 function dateTimeChanged() {
-  const d = new Date(dateInp.value+'T'+timeInp.value+'Z');
-  elapsedTime = (d - REFERENCE_DATE) / (3600 * 1000);
+  const newDate = new Date(dateInp.value + 'T' + timeInp.value + 'Z');
+  simClock.setDate(newDate);
   updateDateTimeUI();
 }
 
+// Slider value moves linearly, we use a power law for actual speed
+const sliderToSpeed = v => Number(v) * Number(v) / 2.5;
+const speedToSlider = v => Math.sqrt(Math.abs(v * 2.5));
+
 function updateSpeedUI() {
-  speedOut.textContent = (speed < 0?'−':'') + Math.abs(speed).toFixed(1)+' ×';
-  const sliderValue = Math.sqrt(Math.abs(speed)); // power of 2 scaling
-  speedSl.value = sliderValue;
-  revBtn.textContent = speed < 0 ? '◅' : '▻';
+  const speed = simClock.speed();
+  speedSl.value = speedToSlider(speed);
+  if (speed !== 0) // keep direction if speed == 0
+    revBtn.textContent = speed < 0 ? '◅' : '▻';
+  speedOut.textContent = (speed < 0 ?'−':'') + Math.abs(speed).toFixed(1)+' ×';
 }
 
-function speedChanged() {
-  const sign = speed !== 0 ? Math.sign(speed) : 1; // keep sign
-  const sliderValue = Number(speedSl.value);
-  speed = sign * (sliderValue * sliderValue); // power of 2 scaling
+function speedSliderChanged() {
+  const speed = sliderToSpeed(speedSl.value);
+  const sign = revBtn.textContent === '◅' ? -1 : 1;
+  simClock.setSpeed(sign * speed);
   updateSpeedUI();
 };
 
@@ -702,25 +717,22 @@ function sceneDoubleClicked(mouseX, mouseY) {
 
 dateInp.onchange = dateTimeChanged;
 timeInp.onchange = dateTimeChanged;
-speedSl.oninput = speedChanged;
+speedSl.oninput = speedSliderChanged;
 
 playBtn.onclick = ()=>{
-  isPlaying = !isPlaying;
-  playBtn.textContent = isPlaying ? '⏸' : '▶';
+  playBtn.textContent = simClock.togglePause() ? '⏸' : '▶';
 };
 
 revBtn.onclick = ()=> {
-  speed *= -1;
-  revBtn.textContent = speed < 0 ? '◅' : '▻';
+  simClock.setSpeed(-simClock.speed());
+  revBtn.textContent = simClock.speed() < 0 ? '◅' : '▻';
   updateSpeedUI();
 };
 
 resBtn.onclick = ()=>{
-  elapsedTime = 0;
-  speed = 1;
+  simClock.reset();
   updateDateTimeUI();
   updateSpeedUI();
-
   camera.position.copy(initialCameraPosition);
   controls.target.copy(initialCameraTarget);
   controls.update();
