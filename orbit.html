@@ -23,6 +23,9 @@
       overflow: hidden;
       background: var(--color-black);
     }
+    body.observer-mode {
+      cursor: crosshair;
+    }
     #hud {
       position: fixed;
       left: 0;
@@ -106,6 +109,8 @@
     <button class="camBtn" data-slot="1">1</button>
     <button class="camBtn" data-slot="2">2</button>
     <button class="camBtn" data-slot="3">3</button>
+    <button id="observerBtn" title="Place Observer">📍</button>
+    <button id="observerCam" class="camBtn" data-slot="4" hidden>4</button>
     <div id="linkIndicator" title="Camera linked">🔒</div>
   </div>
 </div>
@@ -124,6 +129,9 @@
 /*
   TODO:
     - When locked reset return to "at lock time" position
+    - Look at sign in moon position computation
+    - Show sun/raise events with a fading side legend
+    - implement view from observer
 */
 
 import * as THREE from 'three';
@@ -144,28 +152,35 @@ const SKY_TEXTURE_URL = [  // In celestial coordinates from https://svs.gsfc.nas
     'textures/sky_nz.png'  // Back
 ];
 
-// Scale conversion constants
-const KM_PER_UNIT = 1200; // Earth radius is ~5.3 units in this scale
-const toUnits = km => km / KM_PER_UNIT;
-const toRadians = degrees => degrees * Math.PI / 180;
-
 // Physical properties (in kilometers, converted to scene units)
-const EARTH_RADIUS_KM = 6371 * 4; // Scaled up for visibility
-const MOON_RADIUS_KM = 1737 * 4;
+const EARTH_RADIUS_KM = 6371; // Conventional radius for sphere approx.
+const MOON_RADIUS_KM = 1737.53;
 const MOON_DISTANCE_KM = 384400;
 const EARTH_AXIAL_TILT = 23.44; // degrees
 const MOON_AXIAL_TILT = 6.68; // degrees
 
+// Scale conversion constants
+const KM_PER_UNIT = EARTH_RADIUS_KM / 10; // Earth radius is 10 units in this scale
+const toUnits = km => km / KM_PER_UNIT;
+const toRadians = degrees => degrees * Math.PI / 180;
+
+const HORIZON_REFRACTION = toRadians(34.5 / 60); // Standard atmospheric refraction in arcminutes
+
 // Time constants for simulation
 const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
-const SIMULATION_HOUR = 3600; // in seconds
-const SIMULATION_DAY = 24 * SIMULATION_HOUR;
-const SIMULATION_YEAR = 365.25 * SIMULATION_DAY;
-const MOON_ORBITAL_PERIOD = 27.55455 * SIMULATION_DAY; // anomalistic period
-const EARTH_ROTATION_PERIOD = 23.93447 * SIMULATION_HOUR; // sidereal day
-const EARTH_PRECESSION_PERIOD = 25772 * SIMULATION_YEAR; // Period in hours
-const SUN_ORBITAL_PERIOD = 365.25 * SIMULATION_DAY; // sidereal year
-const MOON_NODE_PRECESSION_PERIOD = 18.613 * SIMULATION_YEAR; // Cassini-state orientation
+
+const HOUR = 3600; // In SI seconds
+const SOLAR_DAY = 24 * HOUR; // Mean Solar Day
+const JULIAN_YEAR = 365.25 * SOLAR_DAY;
+
+const SIDERAL_DAY = 23.9344696 * HOUR; // Period of a 360 degrees rotation
+const SIDEREAL_YEAR = 365.256363004 * SOLAR_DAY; // For epoch J2000.0
+
+const EARTH_ROTATION_PERIOD = SIDERAL_DAY;
+const EARTH_ORBITAL_PERIOD = SIDEREAL_YEAR;
+const EARTH_PRECESSION_PERIOD = 25772 * JULIAN_YEAR;
+const MOON_ORBITAL_PERIOD = 27.554551 * SOLAR_DAY; // Anomalistic period
+const MOON_NODE_PRECESSION_PERIOD = 18.612815932 * JULIAN_YEAR;
 
 // Helpers to calculate date differences
 function daysSinceSolstice(targetDate) {
@@ -209,12 +224,6 @@ const MOON = {
 // ============================================================================
 // SCENE SETUP
 // ============================================================================
-
-// A small sphere at the clicked point
-const marker = new THREE.Mesh(
-  new THREE.SphereGeometry(0.1),
-  new THREE.MeshBasicMaterial({ color: 0x00ff00 }) // Lime
-);
 
 // Create renderer and scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -264,6 +273,17 @@ controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
 const initialCameraPosition = camera.position.clone();
 const initialCameraTarget = controls.target.clone();
 
+// Tracks state for an observer on a planet
+const Observer = {
+    object: null,
+    moonVisible: false,
+    observerOnEarth: false,
+    marker: new THREE.Mesh(
+      new THREE.SphereGeometry(toUnits(10)),
+      new THREE.MeshBasicMaterial({ color: 0xFFFFFF }) // White
+    ),
+};
+
 // Tracks state for camera lock-to-target behavior
 const Lock = {
   active: false, // true when camera is locked to a target
@@ -273,6 +293,10 @@ const Lock = {
   prevOrientation: new THREE.Quaternion(), // obj world orientation last frame
   tempVec: new THREE.Vector3(), // helper to avoids re-allocations
   tempQuat: new THREE.Quaternion(), // helper quaternion
+  marker: new THREE.Mesh(
+    new THREE.SphereGeometry(toUnits(100)), // 100 Km radius
+    new THREE.MeshBasicMaterial({ color: 0x00ff00 }) // Lime
+  ),
 };
 
 // Returns first clickable candidate under mouse, or null
@@ -300,17 +324,64 @@ function getClickedCandidate(mouseX, mouseY) {
 }
 
 function unlockCamera() {
-  Lock.lockedObj.remove(marker);
+  Lock.lockedObj.remove(Lock.marker);
   controls.minDistance = DEFAULT_MIN_DISTANCE;
   Lock.lockedObj = null;
   Lock.active = false;
+}
+
+// Orient an observer object on the surface of a parent body.
+// Apply the rotation needed to align the observer's local +Y axis
+// with the surface normal.
+function alignToSurfacePlane(observer) {
+  const sourceUp = new THREE.Vector3(0, 1, 0);
+  const targetUP = observer.position.clone().normalize(); // position in local coordinates
+  observer.quaternion.setFromUnitVectors(sourceUp, targetUP);
+}
+
+// Place an observer on an object surface
+function setObserver(object, surfacePoint) {
+
+  if (!object.geometry.parameters || object.geometry.parameters.radius === undefined) {
+    console.error("Observer must be placed on a THREE.SphereGeometry");
+    return;
+  }
+
+  Observer.object = object;
+
+  // Show a marker on the clicked point
+  const marker = Observer.marker;
+  marker.position.copy(surfacePoint); // in world coordinates
+  object.worldToLocal(marker.position);
+  alignToSurfacePlane(marker); // marker position must be in local coordinates
+  object.add(marker); // will move in sync with object
+
+  Observer.observerOnEarth = (object == earth); // before checking for horizon!
+  Observer.moonVisible = isAboveHorizon(moonAxis, toUnits(MOON_RADIUS_KM));
+
+  // Set camera on marker along center-surface vector, target at radius X10
+  const objCenter = object.getWorldPosition(Lock.tempVec);
+  const outwardOffset = surfacePoint.clone().sub(objCenter).multiplyScalar(10);
+  const target = surfacePoint.clone().add(outwardOffset);
+  const slot = {
+    cameraPos: surfacePoint.toArray(),
+    targetPos: target.toArray()
+  }
+  return slot;
+}
+
+function removeObserver() {
+  if (Observer.object) {
+    Observer.object.remove(Observer.marker);
+    Observer.object = null;
+  }
 }
 
 // Locks the camera into a geostationary orbit around the selected object
 function lockCameraTo(objectToLock, surfacePoint) {
 
   if (!objectToLock.geometry.parameters || objectToLock.geometry.parameters.radius === undefined) {
-    console.error("Object to lock must be a THREE.Mesh with a THREE.SphereGeometry.");
+    console.error("Object to lock must be placed on a THREE.SphereGeometry");
     return;
   }
 
@@ -333,6 +404,7 @@ function lockCameraTo(objectToLock, surfacePoint) {
   camera.position.copy(direction.multiplyScalar(distanceToCenter)).add(objCenter);
 
   // Show a marker on the clicked point
+  const marker = Lock.marker;
   marker.position.copy(surfacePoint);
   Lock.lockedObj.worldToLocal(marker.position);
   Lock.lockedObj.add(marker);
@@ -472,7 +544,7 @@ moonOrbit.add(orbitPath);
 
 // Setup the node markers corresponding to ascending/descending nodes
 function getMarker(color, position) {
-  const geometry = new THREE.SphereGeometry(toUnits(1000));
+  const geometry = new THREE.SphereGeometry(toUnits(600));
   const material = new THREE.MeshBasicMaterial({ color: color });
   const marker = new THREE.Mesh(geometry, material);
   marker.position.set(...position);
@@ -491,7 +563,7 @@ scene.add(ascendingNodePivot);
 scene.add(earthAxis);
 
 // ============================================================================
-// Kepler's Second Law Solver
+// CELESTIAL BODY RUNTIME COMPUTATIONS
 // ============================================================================
 
 /**
@@ -523,8 +595,8 @@ function solveKepler(M, e) {
 function getMoonPosition(elapsedTime) {
 
   // Calculate current Mean Anomaly (M) and Eccentric Anomaly (E)
-  const n = -2 * Math.PI / MOON_ORBITAL_PERIOD; // Mean motion (rad/sec)
-  const M = MOON.MA + n * elapsedTime; // Current Mean Anomaly
+  const n = 2 * Math.PI / MOON_ORBITAL_PERIOD; // Mean motion (rad/sec)
+  const M = MOON.MA - n * elapsedTime; // Current Mean Anomaly
   const EC = MOON.EC;
   const E = solveKepler(M, EC); // Kepler's Second Law
 
@@ -544,6 +616,29 @@ function getMoonPosition(elapsedTime) {
   return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
 }
 
+function isAboveHorizon(target, radius) {
+  if (!Observer.object)
+    return false;
+
+  // Get target's position in the observer frame
+  const targetWorldPos = target.getWorldPosition(Lock.tempVec).clone();
+  const targetLocalPos = Observer.marker.worldToLocal(targetWorldPos.clone());
+
+  // Correction for the object's upper limb (its radius)
+  const radiusCorrection = radius;
+
+  // Correction for atmospheric refraction (lifts the image)
+  let refractionCorrection = 0;
+  if (Observer.observerOnEarth) {
+    const distance = targetLocalPos.length();
+    refractionCorrection = distance * Math.tan(HORIZON_REFRACTION);
+  }
+
+  // The object is visible if its center is above this negative threshold
+  const visibilityThreshold = -(radiusCorrection + refractionCorrection);
+  return targetLocalPos.y > visibilityThreshold;
+}
+
 // ============================================================================
 // ANIMATION LOOP
 // ============================================================================
@@ -553,7 +648,7 @@ const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
 const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
 const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
-const sunOrbitSpeed = 2 * Math.PI / SUN_ORBITAL_PERIOD;
+const sunOrbitSpeed = 2 * Math.PI / EARTH_ORBITAL_PERIOD;
 const sunInitialAngle = (DAYS_SINCE_SOLSTICE / 365.25) * 2 * Math.PI;
 // Prime meridian is at midnight at solstice 00:00
 const earthInitialAngle = sunInitialAngle + Math.PI;
@@ -637,9 +732,18 @@ function animate() {
   const sunAngle = -(sunInitialAngle + elapsedTime * sunOrbitSpeed);
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
-  if (Lock.active)
+  if (Observer.object) {
+    // Pause animation at Moon raise/set
+    const isMoonVisible = isAboveHorizon(moonAxis, toUnits(MOON_RADIUS_KM));
+    const atRaise =  isMoonVisible && !Observer.moonVisible;
+    const atSet   = !isMoonVisible &&  Observer.moonVisible;
+    Observer.moonVisible = isMoonVisible;
+    if (atRaise || atSet)
+      playBtn.onclick();
+  }
+  if (Lock.active) {
     updateCameraLock();
-
+  }
   // Update controls and render
   controls.update();
   updateDateTimeUI();
@@ -663,6 +767,8 @@ const camRow   = document.getElementById('camRow');
 const camStore = document.getElementById('camStore');
 const camClose = document.getElementById('camClose');
 const linkIcon = document.getElementById('linkIndicator');
+const observerBtn = document.getElementById('observerBtn');
+const observerCam = document.getElementById('observerCam');
 
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 19);
@@ -702,18 +808,40 @@ function speedSliderChanged() {
 };
 
 function sceneDoubleClicked(mouseX, mouseY) {
-  const target = getClickedCandidate(mouseX, mouseY);
-  if (!target)
+  const hit = getClickedCandidate(mouseX, mouseY);
+  if (!hit)
     return;
   // Clicked again on the already locked object?
-  if (Lock.active && target.object === Lock.lockedObj) {
+  if (Lock.active && hit.object === Lock.lockedObj) {
     unlockCamera();
     linkIcon.classList.remove('active');
   } else {
-    lockCameraTo(target.object, target.point);
+    lockCameraTo(hit.object, hit.point);
     linkIcon.classList.add('active');
   }
 };
+
+function observerTargetClicked(mouseX, mouseY) {
+  if (!document.body.classList.contains('observer-mode'))
+    return;
+
+  const hit = getClickedCandidate(mouseX, mouseY);
+  if (!hit)
+    return;
+
+  const slot = setObserver(hit.object, hit.point);
+
+  document.body.classList.remove('observer-mode');
+  renderer.domElement.removeEventListener('click', observerClickListener);
+  observerClickListener = null;
+
+  // Setup observer camera: use the 1-based data-slot value, converted to a 0-based index
+  const observerSlotArrayIndex = parseInt(observerCam.dataset.slot) - 1;
+  slots[observerSlotArrayIndex] = slot;
+  slots[observerSlotArrayIndex] = slot;
+  observerCam.classList.add('saved');
+  observerCam.hidden = false;
+}
 
 dateInp.onchange = dateTimeChanged;
 timeInp.onchange = dateTimeChanged;
@@ -738,16 +866,38 @@ resBtn.onclick = ()=>{
   controls.update();
 };
 
-const CAM_KEY = 'orbitCamSlots';
-// Clear localStorage at startup (treat like session storage)
-localStorage.removeItem(CAM_KEY);
-let slots = [];
+let observerClickListener = null;
+
+observerBtn.onclick = () => {
+  const active = Observer.object || observerClickListener;
+  if (!active) {
+    document.body.classList.add('observer-mode');
+    observerBtn.style.background = 'rgba(255,255,255,.5)'; // Highlight the button
+
+    // Add click listener for placing observer, cannot be permanent
+    // otherwise would raise even when pressing this button
+    observerClickListener = (event) => { observerTargetClicked(event.clientX, event.clientY); };
+    renderer.domElement.addEventListener('click', observerClickListener);
+  } else { // Exit observer mode
+    document.body.classList.remove('observer-mode');
+    observerBtn.style.background = ''; // Reset button style
+    observerCam.hidden = true;
+
+    if (observerClickListener) {
+      renderer.domElement.removeEventListener('click', observerClickListener);
+      observerClickListener = null;
+    }
+    removeObserver();
+  }
+};
+
+const slots = new Array(4); // Number of cam buttons
 let pressedSlotIndex = null;
 let clickTimer = null;
 
-function setCameraView({pos, target}){
-  camera.position.set(...pos);
-  controls.target.set(...target);
+function setCameraView(slot) {
+  camera.position.set(...slot.cameraPos);
+  controls.target.set(...slot.targetPos);
   controls.update();
 }
 
@@ -758,6 +908,8 @@ function CamBtnPressed(slotIndex) {
 
 function CamBtnReleased(slotIndex) {
 
+  const isObserverCamera = (this === observerCam);
+
   const longClick = (Date.now() - clickTimer) > 400; // 400 ms threshold
   const sameBtn = pressedSlotIndex === slotIndex;
   pressedSlotIndex = null; // reset
@@ -767,9 +919,8 @@ function CamBtnReleased(slotIndex) {
     return;
 
   // Long click: clear the slot
-  if (longClick) {
+  if (longClick && !isObserverCamera) {
     slots[slotIndex] = null;
-    localStorage.setItem(CAM_KEY, JSON.stringify(slots));
     this.classList.remove('saved');
   } else {
     // Normal click: either save or restore camera
@@ -779,11 +930,10 @@ function CamBtnReleased(slotIndex) {
       setCameraView(slot);
     } else {
       const slot = {
-        pos: camera.position.toArray(),
-        target: controls.target.toArray()
+        cameraPos: camera.position.toArray(),
+        targetPos: controls.target.toArray()
       };
       slots[slotIndex] = slot;
-      localStorage.setItem(CAM_KEY, JSON.stringify(slots));
       this.classList.add('saved');
     }
   }
@@ -791,12 +941,15 @@ function CamBtnReleased(slotIndex) {
 
 // Bind all camera buttons to click and double-click handlers
 document.querySelectorAll('.camBtn').forEach((b,i)=>{
-  b.onmousedown = CamBtnPressed.bind(b, i);
-  b.onmouseup = CamBtnReleased.bind(b, i);
+  // Use the data-slot value (1-based) converted to a 0-based index
+  const slotIndex = parseInt(b.dataset.slot) - 1;
+  b.onmousedown = CamBtnPressed.bind(b, slotIndex);
+  b.onmouseup = CamBtnReleased.bind(b, slotIndex);
 });
 
 addEventListener('dblclick', (event) => {
-  sceneDoubleClicked(event.clientX, event.clientY);
+  if (!document.body.classList.contains('observer-mode'))
+    sceneDoubleClicked(event.clientX, event.clientY);
 });
 
 // Add keyboard listener for CTRL+F to flip 180 degrees controls target
