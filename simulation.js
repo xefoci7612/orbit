@@ -199,9 +199,8 @@ const Observer = {
 
 // Tracks state for camera lock-to-target behavior
 const Lock = {
-  active: false, // true when camera is locked to a target
-  candidates: [], // objects that can be locked
   lockedObj: null, // object we currently track
+  candidates: [], // objects that can be locked
   prevPosition: new THREE.Vector3(), // obj world position last frame
   prevOrientation: new THREE.Quaternion(), // obj world orientation last frame
   tempVec: new THREE.Vector3(), // helper to avoids re-allocations
@@ -241,7 +240,6 @@ function unlockCamera() {
   const mainView = ViewManager.views[mainViewIndex];
   ViewManager.activeControls.minDistance = mainView.controls.minDistance;
   Lock.lockedObj = null;
-  Lock.active = false;
 }
 
 // Orient an observer object on the surface of a parent body.
@@ -304,7 +302,6 @@ function lockCameraTo(objectToLock, surfacePoint) {
     return;
   }
 
-  Lock.active = true;
   Lock.lockedObj = objectToLock;
   const camera = ViewManager.activeCamera;
   const controls = ViewManager.activeControls;
@@ -616,6 +613,8 @@ const Clock = class {
 };
 const simClock = new Clock();
 
+const simEvents = { atRise: false, atSet: false };
+
 // Animation loop function
 function animate() {
 
@@ -652,12 +651,11 @@ function animate() {
     const atRaise =  isMoonVisible && !Observer.moonVisible;
     const atSet   = !isMoonVisible &&  Observer.moonVisible;
     Observer.moonVisible = isMoonVisible;
-    if (atRaise || atSet)
-      playBtn.onclick();
+    Object.assign(simEvents, { atRise: atRaise, atSet: atSet });
   }
-  if (Lock.active) {
+
+  if (Lock.lockedObj)
     updateCameraLock();
-  }
 
   // Update the active controls and render with the active camera
   if (ViewManager.activeControls) {
@@ -665,6 +663,7 @@ function animate() {
   }
 
   renderer.render(scene, ViewManager.activeCamera);
+  return simEvents;
 }
 
 // ============================================================================
@@ -703,6 +702,9 @@ class Simulation {
     setActiveView(mainViewIndex);
     ViewManager.activeCamera.position.copy(defaultViewPosition);
     ViewManager.activeControls.target.copy(defaultViewTarget);
+  }
+  isLocked(object) {
+    return (Lock.lockedObj === object);
   }
   observerActive() {
     return Observer.object !== null;

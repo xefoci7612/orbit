@@ -63,7 +63,7 @@ function sceneDoubleClicked(mouseX, mouseY) {
   if (!hit)
     return;
   // Clicked again on the already locked object?
-  if (Lock.active && hit.object === Lock.lockedObj) {
+  if (simulation.isLocked(hit.object)) {
     simulation.unlockCamera();
     linkIcon.classList.remove('active');
   } else {
@@ -192,7 +192,9 @@ addEventListener('resize', () => {
 });
 
 function animationLoop() {
-  simulation.update();
+  const events = simulation.update();
+  if (events.atRise || events.atSet)
+      playBtn.onclick();
   updateDateTimeUI();
   requestAnimationFrame(animationLoop);
 }
