@@ -105,15 +105,21 @@ const ViewManager = {
 
 // Function to switch views
 function setActiveView(viewIndex) {
+  console.assert(viewIndex >= 0 && viewIndex < ViewManager.views.length, "Invalid view index");
 
   if (ViewManager.activeControls)
     ViewManager.activeControls.enabled = false;
 
   // Set the new active camera and controls
   const newView = ViewManager.views[viewIndex];
+  newView.camera.position.copy(newView.initialPosition);
+  newView.controls.target.copy(newView.initialTarget);
   ViewManager.activeCamera = newView.camera;
   ViewManager.activeControls = newView.controls;
   ViewManager.activeControls.enabled = true;
+
+  // Force the controls to synchronize with the restored state
+  ViewManager.activeControls.update();
 
   // Important: Update camera aspect ratio on switch
   ViewManager.activeCamera.aspect = innerWidth / innerHeight;
@@ -135,8 +141,14 @@ function createView(cameraConfig, controlsConfig) {
     controls.maxDistance = controlsConfig.maxDistance || toUnits(50 * MOON_DISTANCE_KM);
     controls.target.fromArray(controlsConfig.target);
     controls.update(); // Sync controls with initial state
+    controls.enabled = false; // New view starts as disabled
 
-    const view = { camera, controls };
+    const view = {
+      camera,
+      controls,
+      initialPosition: camera.position.clone(),
+      initialTarget: controls.target.clone()
+    };
     const viewIndex = ViewManager.views.push(view) - 1;
     return viewIndex;
 }
@@ -705,9 +717,6 @@ class Simulation {
   }
   isLocked(object) {
     return (Lock.lockedObj === object);
-  }
-  observerActive() {
-    return Observer.object !== null;
   }
   cloneView() {
     const currentCam = ViewManager.activeCamera;
