@@ -222,6 +222,54 @@ const MOON = {
 };
 
 // ============================================================================
+// CAMERA VIEWS SETUP
+// ============================================================================
+
+const ViewManager = {
+  activeCamera: null,
+  activeControls: null,
+  views: [], // An array to hold all our camera/controls pairs
+};
+
+// Function to switch views
+function setActiveView(viewIndex) {
+
+  if (ViewManager.activeControls)
+    ViewManager.activeControls.enabled = false;
+
+  // Set the new active camera and controls
+  const newView = ViewManager.views[viewIndex];
+  ViewManager.activeCamera = newView.camera;
+  ViewManager.activeControls = newView.controls;
+  ViewManager.activeControls.enabled = true;
+
+  // Important: Update camera aspect ratio on switch
+  ViewManager.activeCamera.aspect = innerWidth / innerHeight;
+  ViewManager.activeCamera.updateProjectionMatrix();
+}
+
+// Function to create a new view and add it to the manager
+function createView(cameraConfig, controlsConfig) {
+    const camera = new THREE.PerspectiveCamera(
+      cameraConfig.fov || 45,
+      innerWidth / innerHeight,
+      cameraConfig.near || 0.1,
+      cameraConfig.far || 10000
+    );
+    camera.position.fromArray(cameraConfig.position);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.minDistance = controlsConfig.minDistance || toUnits(1.2 * EARTH_RADIUS_KM);
+    controls.maxDistance = controlsConfig.maxDistance || toUnits(50 * MOON_DISTANCE_KM);
+    controls.target.fromArray(controlsConfig.target);
+    controls.update(); // Sync controls with initial state
+
+    const view = { camera, controls };
+    const viewIndex = ViewManager.views.push(view) - 1;
+    return viewIndex;
+}
+
+// ============================================================================
 // SCENE SETUP
 // ============================================================================
 
@@ -244,34 +292,27 @@ sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane +X axis
 sunLight.lookAt(0, 0, 0);
 scene.add(sunLight);
 
-// Create camera
-const camera = new THREE.PerspectiveCamera(
-  45, // Field of view
-  innerWidth / innerHeight, // Aspect ratio
-  0.1,  // Near clipping plane
-  10000 // Far clipping plane
-);
+// Create the initial camera (this will be view 0)
 const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
 const cameraAzimuth = toRadians(180); // Degrees clockwise from +Z axis
 const cameraElevation = toRadians(10); // Degrees above horizontal plane
-camera.position.set(
-  cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth), // x
-  cameraDistance * Math.sin(cameraElevation),                           // y
-  cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)  // z
-);
-camera.lookAt(0, 0, 0); // Point camera at Earth center
-scene.add(camera);
+const mainViewIndex = createView({
+    position: [
+        cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth),
+        cameraDistance * Math.sin(cameraElevation),
+        cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)
+    ]
+}, {
+    target: [0, 0, 0]
+});
 
-// Setup camera controls
-const DEFAULT_MIN_DISTANCE = toUnits(1.2 * EARTH_RADIUS_KM);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.minDistance = DEFAULT_MIN_DISTANCE;
-controls.maxDistance = toUnits(50 * MOON_DISTANCE_KM);
+// Set the initial active view
+setActiveView(mainViewIndex);
+scene.add(ViewManager.activeCamera);
 
 // Store initial camera position and target
-const initialCameraPosition = camera.position.clone();
-const initialCameraTarget = controls.target.clone();
+const defaultViewPosition = ViewManager.activeCamera.position.clone();
+const defaultViewTarget = ViewManager.activeControls.target.clone();
 
 // Tracks state for an observer on a planet
 const Observer = {
@@ -310,7 +351,7 @@ function getClickedCandidate(mouseX, mouseY) {
   mouse.y = -(mouseY / window.innerHeight) * 2 + 1;
 
   // Update the raycaster with the camera and mouse position
-  raycaster.setFromCamera(mouse, camera);
+  raycaster.setFromCamera(mouse, ViewManager.activeCamera);
 
   // Find intersections with candidates
   const intersects = raycaster.intersectObjects(Lock.candidates);
@@ -325,7 +366,8 @@ function getClickedCandidate(mouseX, mouseY) {
 
 function unlockCamera() {
   Lock.lockedObj.remove(Lock.marker);
-  controls.minDistance = DEFAULT_MIN_DISTANCE;
+  const mainView = ViewManager.views[mainViewIndex];
+  ViewManager.activeControls.minDistance = mainView.controls.minDistance;
   Lock.lockedObj = null;
   Lock.active = false;
 }
@@ -363,11 +405,16 @@ function setObserver(object, surfacePoint) {
   const objCenter = object.getWorldPosition(Lock.tempVec);
   const outwardOffset = surfacePoint.clone().sub(objCenter).multiplyScalar(10);
   const target = surfacePoint.clone().add(outwardOffset);
-  const slot = {
-    cameraPos: surfacePoint.toArray(),
-    targetPos: target.toArray()
-  }
-  return slot;
+
+  // Create a dedicated view for this observer
+  const viewIndex = createView({
+    position: surfacePoint.toArray()
+  }, {
+    target: target.toArray(),
+    //minDistance: toUnits(1),
+  });
+
+  return viewIndex;
 }
 
 function removeObserver() {
@@ -387,6 +434,8 @@ function lockCameraTo(objectToLock, surfacePoint) {
 
   Lock.active = true;
   Lock.lockedObj = objectToLock;
+  const camera = ViewManager.activeCamera;
+  const controls = ViewManager.activeControls;
 
   // Initialize the "previous" world state
   Lock.lockedObj.getWorldPosition(Lock.prevPosition);
@@ -429,6 +478,8 @@ function updateCameraLock() {
   Lock.prevOrientation.copy(currentWorldQuat);
 
   // Capture the camera's current relationship to its target (this preserves user input)
+  const camera = ViewManager.activeCamera;
+  const controls = ViewManager.activeControls;
   const targetToCamera = camera.position.clone().sub(controls.target);
 
   // Apply rotation on the target-to-camera vector
@@ -439,15 +490,6 @@ function updateCameraLock() {
 
   // Recompute camera position from updated target + preserved offset
   camera.position.copy(controls.target).add(targetToCamera);
-}
-
-function flipTarget() {
-  if (!Lock.active)
-    return;
-
-  // Flip target 180°: T' = C - (T - C)
-  controls.target.sub(camera.position).negate().add(camera.position);
-  controls.update();
 }
 
 // ============================================================================
@@ -744,10 +786,15 @@ function animate() {
   if (Lock.active) {
     updateCameraLock();
   }
+
+  // Update the active controls and render with the active camera
+  if (ViewManager.activeControls) {
+    ViewManager.activeControls.update();
+  }
+
   // Update controls and render
-  controls.update();
   updateDateTimeUI();
-  renderer.render(scene, camera);
+  renderer.render(scene, ViewManager.activeCamera);
   requestAnimationFrame(animate);
 }
 
@@ -829,16 +876,15 @@ function observerTargetClicked(mouseX, mouseY) {
   if (!hit)
     return;
 
-  const slot = setObserver(hit.object, hit.point);
+  const viewIdx = setObserver(hit.object, hit.point);
 
   document.body.classList.remove('observer-mode');
   renderer.domElement.removeEventListener('click', observerClickListener);
   observerClickListener = null;
 
   // Setup observer camera: use the 1-based data-slot value, converted to a 0-based index
-  const observerSlotArrayIndex = parseInt(observerCam.dataset.slot) - 1;
-  slots[observerSlotArrayIndex] = slot;
-  slots[observerSlotArrayIndex] = slot;
+  const slotIdx = parseInt(observerCam.dataset.slot) - 1;
+  slots[slotIdx] = viewIdx;
   observerCam.classList.add('saved');
   observerCam.hidden = false;
 }
@@ -861,9 +907,9 @@ resBtn.onclick = ()=>{
   simClock.reset();
   updateDateTimeUI();
   updateSpeedUI();
-  camera.position.copy(initialCameraPosition);
-  controls.target.copy(initialCameraTarget);
-  controls.update();
+  setActiveView(mainViewIndex);
+  ViewManager.activeCamera.position.copy(defaultViewPosition);
+  ViewManager.activeControls.target.copy(defaultViewTarget);
 };
 
 let observerClickListener = null;
@@ -891,15 +937,9 @@ observerBtn.onclick = () => {
   }
 };
 
-const slots = new Array(4); // Number of cam buttons
+const slots = new Array(4).fill(null); // Will store view indices from ViewManager
 let pressedSlotIndex = null;
 let clickTimer = null;
-
-function setCameraView(slot) {
-  camera.position.set(...slot.cameraPos);
-  controls.target.set(...slot.targetPos);
-  controls.update();
-}
 
 function CamBtnPressed(slotIndex) {
   pressedSlotIndex = slotIndex;
@@ -925,15 +965,21 @@ function CamBtnReleased(slotIndex) {
   } else {
     // Normal click: either save or restore camera
     // according if slot is empty or not
-    const slot = slots[slotIndex];
-    if (slot) {
-      setCameraView(slot);
+    const viewIndex = slots[slotIndex];
+    if (viewIndex !== null) {
+      setActiveView(viewIndex);
     } else {
-      const slot = {
-        cameraPos: camera.position.toArray(),
-        targetPos: controls.target.toArray()
-      };
-      slots[slotIndex] = slot;
+       // Save new view: create a new camera and controls, cloning the current state
+      const currentCam = ViewManager.activeCamera;
+      const currentControls = ViewManager.activeControls;
+      const newViewIndex = createView({
+        position: currentCam.position.toArray()
+      }, {
+        target: currentControls.target.toArray(),
+        minDistance: currentControls.minDistance,
+        maxDistance: currentControls.maxDistance
+      });
+      slots[slotIndex] = newViewIndex;
       this.classList.add('saved');
     }
   }
@@ -952,15 +998,8 @@ addEventListener('dblclick', (event) => {
     sceneDoubleClicked(event.clientX, event.clientY);
 });
 
-// Add keyboard listener for CTRL+F to flip 180 degrees controls target
-addEventListener('keydown', (event) => {
-  if (event.ctrlKey && event.key === 'f') {
-    event.preventDefault(); // Prevent browser's default find functionality
-    flipTarget();
-  }
-});
-
 addEventListener('resize', () => {
+  const camera = ViewManager.activeCamera;
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
