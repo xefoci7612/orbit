@@ -58,23 +58,23 @@
     button { cursor: pointer; min-width: 32px; }
     button:hover { background: var(--color-primary-hover); }
     input[type=range] { width: 90px; accent-color: var(--color-primary); background: var(--color-primary); }
-    #speedOut { width: 58px; text-align: right; }
+    #speed-out { width: 58px; text-align: right; }
     /* camera row */
     .hud__cam { justify-content: flex-start; gap: 6px; }
-    .camBtn { width: 32px; opacity: var(--opacity-disabled); }
-    .camBtn.saved {
+    .cam-btn { width: 32px; opacity: var(--opacity-disabled); }
+    .cam-btn.saved {
       opacity: var(--opacity-enabled);
       background: var(--color-primary-hover);
     }
     /* lock indicator */
-    #linkIndicator {
+    #link-indicator {
       display: none;
       font-size: 16px;
       padding: 4px 6px;
       background: transparent;
       border: none;
     }
-    #linkIndicator.active {
+    #link-indicator.active {
       display: block;
     }
     #loader-overlay {
@@ -120,34 +120,34 @@
     <!-- LEFT -->
     <div class="hud__group">
       <label title="Date / Time (UTC+2)">
-        <input id="simDate" type="date">
-        <input id="simTime" type="time" step="60">
+        <input id="sim-date" type="date">
+        <input id="sim-time" type="time" step="60">
       </label>
-      <span id="simElapsed">+0.0 d</span>
+      <span id="sim-elapsed">+0.0 d</span>
     </div>
 
     <!-- CENTRE -->
     <div class="hud__group">
-      <button id="btnReverse" aria-label="Reverse time">▻</button>
-      <button id="btnPlay"   aria-label="Play/Pause">⏸</button>
-      <button id="btnReset"  aria-label="Reset">⟲</button>
+      <button id="btn-reverse" aria-label="Reverse time">▻</button>
+      <button id="btn-play"   aria-label="Play/Pause">⏸</button>
+      <button id="btn-reset"  aria-label="Reset">⟲</button>
     </div>
 
     <!-- RIGHT -->
     <div class="hud__group">
-      <input id="speedSlider" type="range" min="0" max="50" step="0.5" value="1">
-      <output id="speedOut" for="speedSlider">1 ×</output>
+      <input id="speed-slider" type="range" min="0" max="50" step="0.5" value="1">
+      <output id="speed-out" for="speed-slider">1 ×</output>
     </div>
   </div>
 
   <!-- Second row: camera snapshots -->
-  <div class="hud__row hud__cam" id="camRow">
-    <button class="camBtn" data-slot="1">1</button>
-    <button class="camBtn" data-slot="2">2</button>
-    <button class="camBtn" data-slot="3">3</button>
-    <button id="observerBtn" title="Place Observer">📍</button>
-    <button id="observerCam" class="camBtn" data-slot="4" hidden>4</button>
-    <div id="linkIndicator" title="Camera linked">🔒</div>
+  <div class="hud__row hud__cam" id="cam-row">
+    <button class="cam-btn" data-slot="1">1</button>
+    <button class="cam-btn" data-slot="2">2</button>
+    <button class="cam-btn" data-slot="3">3</button>
+    <button id="observer-btn" title="Place Observer">📍</button>
+    <button id="observer-cam" class="cam-btn" data-slot="4" hidden>4</button>
+    <div id="link-indicator" title="Camera linked">🔒</div>
   </div>
 </div>
 
