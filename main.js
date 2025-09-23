@@ -2,6 +2,8 @@
 // UI CONTROLS
 // ============================================================================
 
+'use strict';
+
 import Simulation from './simulation.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
@@ -129,8 +131,12 @@ function camBtnReleased(slotIndex) {
 
   // Long click: clear the slot
   if (longClick && this !== elem.observerCam) {
-    slots[slotIndex] = null;
-    this.classList.remove('saved');
+    const viewIndex = slots[slotIndex];
+    if (viewIndex !== null) {
+      simulation.disposeView(viewIndex);
+      slots[slotIndex] = null;
+      this.classList.remove('saved');
+    }
   } else {
     // Normal click: either save or restore camera
     // according if slot is empty or not

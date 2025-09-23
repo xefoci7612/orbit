@@ -6,8 +6,10 @@
     - implement view from observer
 */
 
+'use strict';
+
 import * as THREE from 'three';
-import { OrbitControls } from 'orbitControls';
+import { ViewManager } from './view.js';
 
 // ============================================================================
 // CONSTANTS AND HELPER FUNCTIONS
@@ -94,66 +96,6 @@ const MOON = {
 };
 
 // ============================================================================
-// CAMERA VIEWS SETUP
-// ============================================================================
-
-const ViewManager = {
-  activeCamera: null,
-  activeControls: null,
-  views: [], // An array to hold all our camera/controls pairs
-};
-
-// Function to switch views
-function setActiveView(viewIndex) {
-  console.assert(viewIndex >= 0 && viewIndex < ViewManager.views.length, "Invalid view index");
-
-  if (ViewManager.activeControls)
-    ViewManager.activeControls.enabled = false;
-
-  // Set the new active camera and controls
-  const newView = ViewManager.views[viewIndex];
-  newView.camera.position.copy(newView.initialPosition);
-  newView.controls.target.copy(newView.initialTarget);
-  ViewManager.activeCamera = newView.camera;
-  ViewManager.activeControls = newView.controls;
-  ViewManager.activeControls.enabled = true;
-
-  // Force the controls to synchronize with the restored state
-  ViewManager.activeControls.update();
-
-  // Important: Update camera aspect ratio on switch
-  ViewManager.activeCamera.aspect = innerWidth / innerHeight;
-  ViewManager.activeCamera.updateProjectionMatrix();
-}
-
-// Function to create a new view and add it to the manager
-function createView(cameraConfig, controlsConfig) {
-    const camera = new THREE.PerspectiveCamera(
-      cameraConfig.fov || 45,
-      innerWidth / innerHeight,
-      cameraConfig.near || 0.1,
-      cameraConfig.far || 10000
-    );
-    camera.position.fromArray(cameraConfig.position);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.minDistance = controlsConfig.minDistance || toUnits(1.2 * EARTH_RADIUS_KM);
-    controls.maxDistance = controlsConfig.maxDistance || toUnits(50 * MOON_DISTANCE_KM);
-    controls.target.fromArray(controlsConfig.target);
-    controls.update(); // Sync controls with initial state
-    controls.enabled = false; // New view starts as disabled
-
-    const view = {
-      camera,
-      controls,
-      initialPosition: camera.position.clone(),
-      initialTarget: controls.target.clone()
-    };
-    const viewIndex = ViewManager.views.push(view) - 1;
-    return viewIndex;
-}
-
-// ============================================================================
 // SCENE SETUP
 // ============================================================================
 
@@ -176,52 +118,92 @@ sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane +X axis
 sunLight.lookAt(0, 0, 0);
 scene.add(sunLight);
 
-// Create the initial camera (this will be view 0)
-const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
-const cameraAzimuth = toRadians(180); // Degrees clockwise from +Z axis
-const cameraElevation = toRadians(10); // Degrees above horizontal plane
-const mainViewIndex = createView({
-    position: [
-        cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth),
-        cameraDistance * Math.sin(cameraElevation),
-        cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)
-    ]
-}, {
-    target: [0, 0, 0]
-});
+// Set the default view
+const startPosition = (function() {
+  const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
+  const cameraAzimuth = toRadians(180); // Degrees clockwise from +Z axis
+  const cameraElevation = toRadians(10); // Degrees above horizontal plane
+  return new THREE.Vector3(
+    cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth),
+    cameraDistance * Math.sin(cameraElevation),
+    cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)
+  );
+})();
+const views = new ViewManager(scene, renderer, startPosition);
 
-// Set the initial active view
-setActiveView(mainViewIndex);
-scene.add(ViewManager.activeCamera);
-
-// Store initial camera position and target
-const defaultViewPosition = ViewManager.activeCamera.position.clone();
-const defaultViewTarget = ViewManager.activeControls.target.clone();
+// List of objects that can have a locked view on them
+const lockables = [];
 
 // Tracks state for an observer on a planet
 const Observer = {
     object: null,
-    moonVisible: false,
+    marker:null,
     observerOnEarth: false,
-    marker: new THREE.Mesh(
-      new THREE.SphereGeometry(toUnits(10)),
-      new THREE.MeshBasicMaterial({ color: 0xFFFFFF }) // White
-    ),
+    moonVisible: false,
+    viewIndex: null,
+    tempVec: new THREE.Vector3(),
 };
 
-// Tracks state for camera lock-to-target behavior
-const Lock = {
-  lockedObj: null, // object we currently track
-  candidates: [], // objects that can be locked
-  prevPosition: new THREE.Vector3(), // obj world position last frame
-  prevOrientation: new THREE.Quaternion(), // obj world orientation last frame
-  tempVec: new THREE.Vector3(), // helper to avoids re-allocations
-  tempQuat: new THREE.Quaternion(), // helper quaternion
-  marker: new THREE.Mesh(
-    new THREE.SphereGeometry(toUnits(100)), // 100 Km radius
-    new THREE.MeshBasicMaterial({ color: 0x00ff00 }) // Lime
-  ),
-};
+// Helper for debugging: Add axes helpers to visualize local frames
+function addAxesHelper(object, size) {
+    const axesHelper = new THREE.AxesHelper(size);
+    object.add(axesHelper);
+    return axesHelper;
+}
+
+// Helper used by observer and orbit locking
+function createMarker(radius, color) {
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(radius),
+    new THREE.MeshBasicMaterial({ color })
+  );
+}
+
+function disposeMarker(marker) {
+  marker.geometry.dispose();
+  marker.material.dispose();
+}
+
+// Add a child object, usually a marker, on a surface of
+// a body and align local coordinates of added child
+function addAligned(marker, object, surfacePoint) {
+
+  // Surface point must be in world coords
+  marker.position.copy(surfacePoint);
+  object.worldToLocal(marker.position);
+  alignToSurfacePlane(marker);
+  object.add(marker);
+  marker.updateWorldMatrix(true, false);
+}
+
+// Orients the local coordinate frame of an object on the surface of a parent body
+function alignToSurfacePlane(marker) {
+
+    // Point on the surface must be in parent coordinates
+    const p = marker.position;
+
+    // Calculate Local Y-axis (outward normal from sphere)
+    const y_local = p.clone().normalize();
+
+    // Calculate Local X-axis as tangential velocity (z, 0, -x) for Y-axis rotation
+    const v = new THREE.Vector3(p.z, 0, -p.x);
+
+    // Detect special case of point exactly on the global Y-axis (pole) and
+    // fallback on parent X-axis
+    const onY = v.lengthSq() === 0;
+    const x_local = onY ? new THREE.Vector3(1, 0, 0) : v.normalize();
+
+    // Local Z-axis is cross product of x_local and y_local for right-handed system
+    const z_local = new THREE.Vector3().crossVectors(x_local, y_local);
+
+    // Rotation matrix whose columns are the local basis vectors (x_local, y_local, z_local)
+    // This matrix transforms from point's local frame to its parent's (sphere's) frame.
+    const rotationMatrix = new THREE.Matrix4();
+    rotationMatrix.makeBasis(x_local, y_local, z_local);
+
+    // Set point's quaternion from this rotation matrix
+    marker.quaternion.setFromRotationMatrix(rotationMatrix);
+}
 
 // Returns first clickable candidate under mouse, or null
 function getClickedCandidate(mouseX, mouseY) {
@@ -234,10 +216,11 @@ function getClickedCandidate(mouseX, mouseY) {
   mouse.y = -(mouseY / window.innerHeight) * 2 + 1;
 
   // Update the raycaster with the camera and mouse position
-  raycaster.setFromCamera(mouse, ViewManager.activeCamera);
+  const view = views.getActive();
+  raycaster.setFromCamera(mouse, view.camera);
 
   // Find intersections with candidates
-  const intersects = raycaster.intersectObjects(Lock.candidates);
+  const intersects = raycaster.intersectObjects(lockables);
   if (intersects.length === 0)
     return null;
 
@@ -247,130 +230,61 @@ function getClickedCandidate(mouseX, mouseY) {
   };
 }
 
-function unlockCamera() {
-  Lock.lockedObj.remove(Lock.marker);
-  const mainView = ViewManager.views[mainViewIndex];
-  ViewManager.activeControls.minDistance = mainView.controls.minDistance;
-  Lock.lockedObj = null;
-}
+// Locks the camera into a geostationary orbit around the selected object
+function lockCameraTo(objectToLock, surfacePoint) {
 
-// Orient an observer object on the surface of a parent body.
-// Apply the rotation needed to align the observer's local +Y axis
-// with the surface normal.
-function alignToSurfacePlane(observer) {
-  const sourceUp = new THREE.Vector3(0, 1, 0);
-  const targetUP = observer.position.clone().normalize(); // position in local coordinates
-  observer.quaternion.setFromUnitVectors(sourceUp, targetUP);
+  // Set a marker in local coordinates on object's surface point
+  const marker = createMarker(toUnits(50), 0x00ff00);
+  addAligned(marker, objectToLock, surfacePoint);
+
+  // Lock the active view aligned to object's center
+  views.setOrbit(marker, objectToLock);
 }
 
 // Place an observer on an object surface
 function setObserver(object, surfacePoint) {
 
-  if (!object.geometry.parameters || object.geometry.parameters.radius === undefined) {
-    console.error("Observer must be placed on a THREE.SphereGeometry");
-    return;
-  }
+  // Currently we handle only one observer
+  console.assert(Observer.object === null, "Setting already existing observer");
+
+  // Position and orient the marker on the surface
+  const marker = createMarker(toUnits(10), 0xFFFFFF);
+  addAligned(marker, object, surfacePoint);
 
   Observer.object = object;
+  Observer.marker = marker;
 
-  // Show a marker on the clicked point
-  const marker = Observer.marker;
-  marker.position.copy(surfacePoint); // in world coordinates
-  object.worldToLocal(marker.position);
-  alignToSurfacePlane(marker); // marker position must be in local coordinates
-  object.add(marker); // will move in sync with object
-
-  Observer.observerOnEarth = (object == earth); // before checking for horizon!
+  // Init observer events
+  Observer.observerOnEarth = (object === earth);
   Observer.moonVisible = isAboveHorizon(moonAxis, toUnits(MOON_RADIUS_KM));
 
-  // Set camera on marker along center-surface vector, target at radius X10
-  const objCenter = object.getWorldPosition(Lock.tempVec);
-  const outwardOffset = surfacePoint.clone().sub(objCenter).multiplyScalar(10);
-  const target = surfacePoint.clone().add(outwardOffset);
+  // Create a new observer view placed on marker
+  const eyeHeight = toUnits( 20); // km above surface
+  const lookAhead = toUnits(100); // look at km ahead on horizon
+  const viewIndex = views.createObserver(marker, eyeHeight, lookAhead);
+  Observer.viewIndex = viewIndex;
 
-  // Create a dedicated view for this observer
-  const viewIndex = createView({
-    position: surfacePoint.toArray()
-  }, {
-    target: target.toArray(),
-    //minDistance: toUnits(1),
-  });
+  // Lock the view camera on the marker
+  const view = views.get(viewIndex);
+  view.lockTo(marker);
+
+  // DEBUG
+  addAxesHelper(marker, 10);
+  addAxesHelper(view.camera, 5);
 
   return viewIndex;
 }
 
 function removeObserver() {
-  if (Observer.object) {
-    Observer.object.remove(Observer.marker);
-    Observer.object = null;
-  }
-}
-
-// Locks the camera into a geostationary orbit around the selected object
-function lockCameraTo(objectToLock, surfacePoint) {
-
-  if (!objectToLock.geometry.parameters || objectToLock.geometry.parameters.radius === undefined) {
-    console.error("Object to lock must be placed on a THREE.SphereGeometry");
-    return;
-  }
-
-  Lock.lockedObj = objectToLock;
-  const camera = ViewManager.activeCamera;
-  const controls = ViewManager.activeControls;
-
-  // Initialize the "previous" world state
-  Lock.lockedObj.getWorldPosition(Lock.prevPosition);
-  Lock.lockedObj.getWorldQuaternion(Lock.prevOrientation);
-
-  // Center camera on target for better UX (user can still pan after)
-  const objCenter = Lock.prevPosition.clone();
-  controls.target.copy(objCenter);
-  const radius = Lock.lockedObj.geometry.parameters.radius
-  controls.minDistance = radius * 1.2;
-
-  // Reposition camera along center-surface vector, same distance
-  const distanceToCenter = camera.position.distanceTo(objCenter);
-  const direction = Lock.tempVec.subVectors(surfacePoint, objCenter).normalize();
-  camera.position.copy(direction.multiplyScalar(distanceToCenter)).add(objCenter);
-
-  // Show a marker on the clicked point
-  const marker = Lock.marker;
-  marker.position.copy(surfacePoint);
-  Lock.lockedObj.worldToLocal(marker.position);
-  Lock.lockedObj.add(marker);
-
-  controls.update();
-}
-
-function updateCameraLock() {
-
-  console.assert(Lock.lockedObj, "Called update lock with no locked object");
-
-  // Get current target transform
-  const currentWorldPos = Lock.lockedObj.getWorldPosition(Lock.tempVec);
-  const currentWorldQuat = Lock.lockedObj.getWorldQuaternion(Lock.tempQuat);
-
-  // Compute transform delta since last frame
-  const translationDelta = currentWorldPos.clone().sub(Lock.prevPosition);
-  const rotationDelta = currentWorldQuat.clone().multiply(Lock.prevOrientation.clone().invert());
-
-  // Cache current transform for next frame’s delta
-  Lock.prevPosition.copy(currentWorldPos);
-  Lock.prevOrientation.copy(currentWorldQuat);
-
-  // Capture the camera's current relationship to its target (this preserves user input)
-  const camera = ViewManager.activeCamera;
-  const controls = ViewManager.activeControls;
-  const targetToCamera = camera.position.clone().sub(controls.target);
-
-  // Apply rotation on the target-to-camera vector
-  targetToCamera.applyQuaternion(rotationDelta);
-
-  // Apply translation to target to preserve user pan
-  controls.target.add(translationDelta);
-
-  // Recompute camera position from updated target + preserved offset
-  camera.position.copy(controls.target).add(targetToCamera);
+  const view = views.get(Observer.viewIndex);
+  view.unlock();
+  const marker = Observer.marker;
+  marker.parent.remove(marker);
+  disposeMarker(marker);
+  views.dispose(Observer.viewIndex);
+  Observer.object = null;
+  Observer.viewIndex = null;
+  Observer.marker = null;
 }
 
 // ============================================================================
@@ -419,7 +333,7 @@ const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
   new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
 );
-Lock.candidates.push(earth);
+lockables.push(earth);
 
 // Add parent to tilt and rotate vertical axis for precession
 const earthAxis = new THREE.Object3D();
@@ -445,7 +359,7 @@ const moon = new THREE.Mesh(
 const moonAxis = new THREE.Object3D();
 moonAxis.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
 moonAxis.add(moon);
-Lock.candidates.push(moon);
+lockables.push(moon);
 
 // Add parent to set a fixed inclined orbital path, this is the target when setting
 // current moon position in animation (through moonAxis object)
@@ -540,12 +454,11 @@ function getMoonPosition(elapsedTime) {
 }
 
 function isAboveHorizon(target, radius) {
-  if (!Observer.object)
-    return false;
 
   // Get target's position in the observer frame
-  const targetWorldPos = target.getWorldPosition(Lock.tempVec).clone();
-  const targetLocalPos = Observer.marker.worldToLocal(targetWorldPos.clone());
+  const temp = Observer.tempVec;
+  target.getWorldPosition(temp);
+  const targetLocalPos = Observer.marker.worldToLocal(temp);
 
   // Correction for the object's upper limb (its radius)
   const radiusCorrection = radius;
@@ -666,15 +579,9 @@ function animate() {
     Object.assign(simEvents, { atRise: atRaise, atSet: atSet });
   }
 
-  if (Lock.lockedObj)
-    updateCameraLock();
-
   // Update the active controls and render with the active camera
-  if (ViewManager.activeControls) {
-    ViewManager.activeControls.update();
-  }
-
-  renderer.render(scene, ViewManager.activeCamera);
+  const activeCamera = views.update();
+  renderer.render(scene, activeCamera);
   return simEvents;
 }
 
@@ -689,12 +596,12 @@ class Simulation {
     this.speed = simClock.speed.bind(simClock);
     this.setSpeed = simClock.setSpeed.bind(simClock);
     this.togglePause = simClock.togglePause.bind(simClock);
-    this.getClickedCandidate = getClickedCandidate;
+    this.setActiveView = views.setActive.bind(views);
+    this.disposeView = views.dispose.bind(views);
     this.lockCameraTo = lockCameraTo;
-    this.unlockCamera = unlockCamera;
     this.setObserver = setObserver;
     this.removeObserver = removeObserver;
-    this.setActiveView = setActiveView;
+    this.getClickedCandidate = getClickedCandidate;
   }
   getRenderer() {
     return renderer;
@@ -711,30 +618,30 @@ class Simulation {
   }
   reset() {
     simClock.reset();
-    setActiveView(mainViewIndex);
-    ViewManager.activeCamera.position.copy(defaultViewPosition);
-    ViewManager.activeControls.target.copy(defaultViewTarget);
+    views.setDefault();
   }
   isLocked(object) {
-    return (Lock.lockedObj === object);
+    const lockedViews = views.getAllLocked();
+    return lockedViews.some(v => v.lock.object === object);
+  }
+  unlockCamera() {
+    const view = views.getActive();
+    const marker = view.lock.target;
+    marker.parent.remove(marker);
+    disposeMarker(marker);
+    view.unlock();
   }
   cloneView() {
-    const currentCam = ViewManager.activeCamera;
-    const currentControls = ViewManager.activeControls;
-    const newViewIndex = createView({
-      position: currentCam.position.toArray()
-    }, {
-      target: currentControls.target.toArray(),
-      minDistance: currentControls.minDistance,
-      maxDistance: currentControls.maxDistance
-    });
+    const v = views.getActive();
+    const newViewIndex = views.clone(v);
     return newViewIndex;
   }
   resize() {
-    const camera = ViewManager.activeCamera;
+    const v = views.getActive();
+    const camera = v.camera;
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
+    views.renderer.setSize(innerWidth, innerHeight);
   }
 };
 
