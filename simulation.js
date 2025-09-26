@@ -86,7 +86,7 @@ const DAYS_SINCE_SOLSTICE = daysSinceSolstice(REFERENCE_DATE);
 
     Y-axis: 90° ahead of the X-axis in the direction of Earth's orbit around the Sun.
 */
-const MOON = {
+const MOON_DATA = {
   SemiMajorAxis: toUnits(384821.4581097544), // in km
   EC: 0.05212487669881421,          // eccentricity
   IN: toRadians(5.280240463394533), // inclination relative to ecliptic
@@ -119,7 +119,7 @@ sunLight.lookAt(0, 0, 0);
 scene.add(sunLight);
 
 // Set the default view
-const startPosition = (function() {
+const defaultCameraPos = (function() {
   const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
   const cameraAzimuth = toRadians(180); // Degrees clockwise from +Z axis
   const cameraElevation = toRadians(10); // Degrees above horizontal plane
@@ -129,13 +129,13 @@ const startPosition = (function() {
     cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)
   );
 })();
-const views = new ViewManager(scene, renderer, startPosition);
+const views = new ViewManager(scene, renderer, defaultCameraPos);
 
 // List of objects that can have a locked view on them
-const lockables = [];
+const trackableBodies = [];
 
 // Tracks state for an observer on a planet
-const Observer = {
+const observerState = {
     object: null,
     marker:null,
     observerOnEarth: false,
@@ -166,18 +166,18 @@ function disposeMarker(marker) {
 
 // Add a child object, usually a marker, on a surface of
 // a body and align local coordinates of added child
-function addAligned(marker, object, surfacePoint) {
+function attachToSurface(marker, object, surfacePoint) {
 
   // Surface point must be in world coords
   marker.position.copy(surfacePoint);
   object.worldToLocal(marker.position);
-  alignToSurfacePlane(marker);
+  orientToSurface(marker);
   object.add(marker);
   marker.updateWorldMatrix(true, false);
 }
 
 // Orients the local coordinate frame of an object on the surface of a parent body
-function alignToSurfacePlane(marker) {
+function orientToSurface(marker) {
 
     // Point on the surface must be in parent coordinates
     const p = marker.position;
@@ -205,8 +205,8 @@ function alignToSurfacePlane(marker) {
     marker.quaternion.setFromRotationMatrix(rotationMatrix);
 }
 
-// Returns first clickable candidate under mouse, or null
-function getClickedCandidate(mouseX, mouseY) {
+// Returns any trackable object under mouse
+function pickObject(mouseX, mouseY) {
 
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
@@ -220,7 +220,7 @@ function getClickedCandidate(mouseX, mouseY) {
   raycaster.setFromCamera(mouse, view.camera);
 
   // Find intersections with candidates
-  const intersects = raycaster.intersectObjects(lockables);
+  const intersects = raycaster.intersectObjects(trackableBodies);
   if (intersects.length === 0)
     return null;
 
@@ -231,38 +231,38 @@ function getClickedCandidate(mouseX, mouseY) {
 }
 
 // Locks the camera into a geostationary orbit around the selected object
-function lockCameraTo(objectToLock, surfacePoint) {
+function lockToOrbit(objectToLock, surfacePoint) {
 
   // Set a marker in local coordinates on object's surface point
   const marker = createMarker(toUnits(50), 0x00ff00);
-  addAligned(marker, objectToLock, surfacePoint);
+  attachToSurface(marker, objectToLock, surfacePoint);
 
   // Lock the active view aligned to object's center
-  views.setOrbit(marker, objectToLock);
+  views.lockToOrbitView(marker, objectToLock);
 }
 
 // Place an observer on an object surface
-function setObserver(object, surfacePoint) {
+function enterObserverMode(object, surfacePoint) {
 
   // Currently we handle only one observer
-  console.assert(Observer.object === null, "Setting already existing observer");
+  console.assert(observerState.object === null, "Setting already existing observer");
 
   // Position and orient the marker on the surface
   const marker = createMarker(toUnits(10), 0xFFFFFF);
-  addAligned(marker, object, surfacePoint);
+  attachToSurface(marker, object, surfacePoint);
 
-  Observer.object = object;
-  Observer.marker = marker;
+  observerState.object = object;
+  observerState.marker = marker;
 
   // Init observer events
-  Observer.observerOnEarth = (object === earth);
-  Observer.moonVisible = isAboveHorizon(moonAxis, toUnits(MOON_RADIUS_KM));
+  observerState.observerOnEarth = (object === earth);
+  observerState.moonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
 
   // Create a new observer view placed on marker
   const eyeHeight = toUnits( 20); // km above surface
   const lookAhead = toUnits(100); // look at km ahead on horizon
-  const viewIndex = views.createObserver(marker, eyeHeight, lookAhead);
-  Observer.viewIndex = viewIndex;
+  const viewIndex = views.createObserverView(marker, eyeHeight, lookAhead);
+  observerState.viewIndex = viewIndex;
 
   // Lock the view camera on the marker
   const view = views.get(viewIndex);
@@ -275,16 +275,16 @@ function setObserver(object, surfacePoint) {
   return viewIndex;
 }
 
-function removeObserver() {
-  const view = views.get(Observer.viewIndex);
+function exitObserverMode() {
+  const view = views.get(observerState.viewIndex);
   view.unlock();
-  const marker = Observer.marker;
+  const marker = observerState.marker;
   marker.parent.remove(marker);
   disposeMarker(marker);
-  views.dispose(Observer.viewIndex);
-  Observer.object = null;
-  Observer.viewIndex = null;
-  Observer.marker = null;
+  views.dispose(observerState.viewIndex);
+  observerState.object = null;
+  observerState.viewIndex = null;
+  observerState.marker = null;
 }
 
 // ============================================================================
@@ -333,17 +333,17 @@ const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
   new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
 );
-lockables.push(earth);
+trackableBodies.push(earth); // has to be a mesh object
 
 // Add parent to tilt and rotate vertical axis for precession
-const earthAxis = new THREE.Object3D();
+const tiltedEarth = new THREE.Object3D();
 // Set the Earth's obliquity (axial tilt).
 // At summer solstice the North Pole must be tilted towards the Sun.
 // In Three.js coordinate system (+X right, +Y up, +Z toward camera),
 // when Sun is on the +X axis, a negative (clockwise) rotation around
 // the Z-axis correctly tilts the Earth's North Pole towards the sun.
-earthAxis.rotation.z = -toRadians(EARTH_AXIAL_TILT);
-earthAxis.add(earth);
+tiltedEarth.rotation.z = -toRadians(EARTH_AXIAL_TILT);
+tiltedEarth.add(earth);
 
 // Create Moon hierarchy, each node performs at most one rotation
 // Starting from the innermost node, the moon mesh that performs
@@ -356,19 +356,19 @@ const moon = new THREE.Mesh(
 );
 
 // Add parent to tilt and rotate vertical axis for precession
-const moonAxis = new THREE.Object3D();
-moonAxis.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
-moonAxis.add(moon);
-lockables.push(moon);
+const tiltedMoon = new THREE.Object3D();
+tiltedMoon.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
+tiltedMoon.add(moon);
+trackableBodies.push(moon);
 
 // Add parent to set a fixed inclined orbital path, this is the target when setting
 // current moon position in animation (through moonAxis object)
 const moonOrbit = new THREE.Object3D();
-moonOrbit.rotation.x = MOON.IN; // inclination to ecliptic
-moonOrbit.add(moonAxis);
+moonOrbit.rotation.x = MOON_DATA.IN; // inclination to ecliptic
+moonOrbit.add(tiltedMoon);
 
 // Create an elliptical curve for the Moon's orbit in its orbital plane
-const [points, rAsc, rDes] = ellipticCurve(MOON.SemiMajorAxis, MOON.EC, MOON.W);
+const [points, rAsc, rDes] = ellipticCurve(MOON_DATA.SemiMajorAxis, MOON_DATA.EC, MOON_DATA.W);
 const vertexBuffer = new THREE.BufferAttribute(points, 3);
 const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -397,7 +397,7 @@ ascendingNodePivot.add(moonOrbit);
 
 // Finally add Moon and Earth hierarchy to scene
 scene.add(ascendingNodePivot);
-scene.add(earthAxis);
+scene.add(tiltedEarth);
 
 // ============================================================================
 // CELESTIAL BODY RUNTIME COMPUTATIONS
@@ -433,8 +433,8 @@ function getMoonPosition(elapsedTime) {
 
   // Calculate current Mean Anomaly (M) and Eccentric Anomaly (E)
   const n = 2 * Math.PI / MOON_ORBITAL_PERIOD; // Mean motion (rad/sec)
-  const M = MOON.MA - n * elapsedTime; // Current Mean Anomaly
-  const EC = MOON.EC;
+  const M = MOON_DATA.MA - n * elapsedTime; // Current Mean Anomaly
+  const EC = MOON_DATA.EC;
   const E = solveKepler(M, EC); // Kepler's Second Law
 
   // Calculate the current True Anomaly (TA or ν), the real angle from perigee
@@ -444,10 +444,10 @@ function getMoonPosition(elapsedTime) {
   const TA = Math.atan2(sinTA, cosTA);
 
   // Calculate distance from Earth (focus)
-  const r = MOON.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
+  const r = MOON_DATA.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
 
   // Calculate position in the orbital plane
-  const angleFromAscendingNode = TA + MOON.W; // x-axis is at ascending node
+  const angleFromAscendingNode = TA + MOON_DATA.W; // x-axis is at ascending node
   const x = r * Math.cos(angleFromAscendingNode);
   const z = r * Math.sin(angleFromAscendingNode);
   return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
@@ -456,16 +456,16 @@ function getMoonPosition(elapsedTime) {
 function isAboveHorizon(target, radius) {
 
   // Get target's position in the observer frame
-  const temp = Observer.tempVec;
+  const temp = observerState.tempVec;
   target.getWorldPosition(temp);
-  const targetLocalPos = Observer.marker.worldToLocal(temp);
+  const targetLocalPos = observerState.marker.worldToLocal(temp);
 
   // Correction for the object's upper limb (its radius)
   const radiusCorrection = radius;
 
   // Correction for atmospheric refraction (lifts the image)
   let refractionCorrection = 0;
-  if (Observer.observerOnEarth) {
+  if (observerState.observerOnEarth) {
     const distance = targetLocalPos.length();
     refractionCorrection = distance * Math.tan(HORIZON_REFRACTION);
   }
@@ -491,7 +491,7 @@ const earthInitialAngle = sunInitialAngle + Math.PI;
 
 // Clock works also when tab is hidden, can be set/reset by UI, time
 // can run faster and/or backward from real time and is adjustable
-const Clock = class {
+const SimClock = class {
   constructor() {
     this.running = true;
     this.referenceTime = REFERENCE_DATE.getTime(); // fixed t=0 point
@@ -536,9 +536,9 @@ const Clock = class {
     this.simulationTime = newDate.getTime() - this._deltaSinceLastResume();
   }
 };
-const simClock = new Clock();
+const simClock = new SimClock();
 
-const simEvents = { atRise: false, atSet: false };
+const transientEvents = { atRise: false, atSet: false };
 
 // Animation loop function
 function animate() {
@@ -549,7 +549,7 @@ function animate() {
   earth.rotation.y = earthInitialAngle  + elapsedTime * earthRotationSpeed;
 
   // Earth axial precession (at t = 0 inclination is aligned toward Sun at solstice)
-  earthAxis.rotation.y = precessionSpeed * elapsedTime;
+  tiltedEarth.rotation.y = precessionSpeed * elapsedTime;
 
   // Moon rotation around its axis, in tidal locking with Earth
   // Offset 180-degree because texture is centered on 0° longitude (facing earth)
@@ -557,11 +557,11 @@ function animate() {
 
   // Moon orbit around Earth
   const [x, y, z] = getMoonPosition(elapsedTime);
-  moonAxis.position.set(x, y, z);
+  tiltedMoon.position.set(x, y, z);
 
   // The Moon's orbital plane precesses backwards (retrograde).
   // This is a rotation around the Ecliptic Pole (the Y-axis).
-  ascendingNodePivot.rotation.y = MOON.OM - moonNodeSpeed * elapsedTime;
+  ascendingNodePivot.rotation.y = MOON_DATA.OM - moonNodeSpeed * elapsedTime;
 
   // The sun's orbital motion is counter-clockwise when viewed from above (positive Y)
   // In Three.js coordinate system (+X right, +Y up, +Z toward camera).
@@ -570,19 +570,19 @@ function animate() {
   const sunAngle = -(sunInitialAngle + elapsedTime * sunOrbitSpeed);
   sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
 
-  if (Observer.object) {
+  if (observerState.object) {
     // Pause animation at Moon raise/set
-    const isMoonVisible = isAboveHorizon(moonAxis, toUnits(MOON_RADIUS_KM));
-    const atRaise =  isMoonVisible && !Observer.moonVisible;
-    const atSet   = !isMoonVisible &&  Observer.moonVisible;
-    Observer.moonVisible = isMoonVisible;
-    Object.assign(simEvents, { atRise: atRaise, atSet: atSet });
+    const isMoonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
+    const atRaise =  isMoonVisible && !observerState.moonVisible;
+    const atSet   = !isMoonVisible &&  observerState.moonVisible;
+    observerState.moonVisible = isMoonVisible;
+    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet });
   }
 
   // Update the active controls and render with the active camera
   const activeCamera = views.update();
   renderer.render(scene, activeCamera);
-  return simEvents;
+  return transientEvents;
 }
 
 // ============================================================================
@@ -598,10 +598,10 @@ class Simulation {
     this.togglePause = simClock.togglePause.bind(simClock);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
-    this.lockCameraTo = lockCameraTo;
-    this.setObserver = setObserver;
-    this.removeObserver = removeObserver;
-    this.getClickedCandidate = getClickedCandidate;
+    this.lockToOrbit = lockToOrbit;
+    this.enterObserverMode = enterObserverMode;
+    this.exitObserverMode = exitObserverMode;
+    this.pickObject = pickObject;
   }
   getRenderer() {
     return renderer;
@@ -621,12 +621,12 @@ class Simulation {
     views.setDefault();
   }
   isLocked(object) {
-    const lockedViews = views.getAllLocked();
-    return lockedViews.some(v => v.lock.object === object);
+    const lockedObjects = views.getAllLockedObjects();
+    return lockedObjects.includes(object);
   }
   unlockCamera() {
     const view = views.getActive();
-    const marker = view.lock.target;
+    const marker = view.cameraLock.target;
     marker.parent.remove(marker);
     disposeMarker(marker);
     view.unlock();

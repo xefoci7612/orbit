@@ -52,13 +52,13 @@ class ObserverUI {
 
     console.assert(this.state == "place", "ObserverUI: clicked while not placing!");
 
-    const hit = simulation.getClickedCandidate(event.clientX, event.clientY);
+    const hit = simulation.pickObject(event.clientX, event.clientY);
     if (!hit)
       return;
 
     // Place observer camera
     const slotIdx = parseInt(elem.observerCam.dataset.slot) - 1;
-    const viewIdx = simulation.setObserver(hit.object, hit.point);
+    const viewIdx = simulation.enterObserverMode(hit.object, hit.point);
     slots[slotIdx] = viewIdx;
     this.setState("active");
   };
@@ -90,7 +90,7 @@ class ObserverUI {
       document.body.classList.remove('observer-mode');
       elem.observerBtn.style.background = '';
       elem.observerCam.hidden = true;
-      simulation.removeObserver();
+      simulation.exitObserverMode();
 
       // User clicked observer button while still looking for a place
       if (curState === "place") {
@@ -187,7 +187,7 @@ function updateSpeedUI() {
 }
 
 function sceneDoubleClicked(mouseX, mouseY) {
-  const hit = simulation.getClickedCandidate(mouseX, mouseY);
+  const hit = simulation.pickObject(mouseX, mouseY);
   if (!hit)
     return;
   // Clicked again on the already locked object?
@@ -195,7 +195,7 @@ function sceneDoubleClicked(mouseX, mouseY) {
     simulation.unlockCamera();
     elem.linkIndicator.classList.remove('active');
   } else {
-    simulation.lockCameraTo(hit.object, hit.point);
+    simulation.lockToOrbit(hit.object, hit.point);
     elem.linkIndicator.classList.add('active');
   }
 };

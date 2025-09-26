@@ -7,7 +7,7 @@ import { OrbitControls } from 'orbitControls';
 // CAMERA VIEWS
 // ============================================================================
 
-class Lock {
+class CameraLock {
   constructor(marker, view) {
     this.target = marker;
     this.view = view;
@@ -34,29 +34,25 @@ class Lock {
     this.prevPosition.copy(currentPos);
     this.prevOrientation.copy(currentQuat);
 
-    // Apply same transform to the locked view
+    // Applies a rigid-body transform delta (translation + rotation) to the active camera
+    // while preserving the user's relative viewpoint (offset from target).
+    // This is used to keep the camera locked to a moving/rotating object.
     const camera = this.view.camera;
     const controls = this.view.controls;
-    this.applyTransform(translationDelta, rotationDelta, camera, controls);
-    controls.update();
-  }
-
-  // Applies a rigid-body transform delta (translation + rotation) to the active camera
-  // while preserving the user's relative viewpoint (offset from target).
-  // This is used to keep the camera locked to a moving/rotating object.
-  applyTransform(translation, rotation, camera, controls) {
 
     // Preserve current offset from target (in world space)
     const targetToCamera = camera.position.clone().sub(controls.target);
 
     // Rotate the offset vector by the object's rotation delta
-    targetToCamera.applyQuaternion(rotation);
+    targetToCamera.applyQuaternion(rotationDelta);
 
     // Move the target by the object's translation delta
-    controls.target.add(translation);
+    controls.target.add(translationDelta);
 
     // Reconstruct camera position
     camera.position.copy(controls.target).add(targetToCamera);
+
+    controls.update();
   }
 };
 
@@ -66,16 +62,16 @@ class View {
     this.controls = controls;
     this.initialPosition = camera.position.clone();
     this.initialTarget = controls.target.clone();
-    this.lock = null;
+    this.cameraLock = null;
   }
 
   lockTo(marker) {
     // Set a lock on the view so that camera will follow the marker
-    this.lock = new Lock(marker, this);
+    this.cameraLock = new CameraLock(marker, this);
   }
 
   unlock() {
-    this.lock = null;
+    this.cameraLock = null;
   }
 };
 
@@ -100,12 +96,9 @@ class ViewManager {
     return this.views[this.activeIdx];
   }
 
-  getActiveIndex() {
-    return this.activeIdx;
-  }
-
-  getAllLocked() {
-    return this.views.filter(v => v.lock !== null);
+  getAllLockedObjects() {
+    return this.views.filter(v => v.cameraLock !== null)
+                     .map(v => v.cameraLock.object);
   }
 
   create(cameraConfig, controlsConfig) {
@@ -142,18 +135,17 @@ class ViewManager {
     const view = this.get(viewIndex);
     view.camera.parent.remove(view.camera);
     view.controls.dispose();
-    console.assert(view.lock === null, "Disposing view with an active lock");
+    console.assert(view.cameraLock === null, "Disposing view with an active lock");
   }
 
   setActive(viewIndex) {
 
-    const curView = this.getActive();
-
     // Disable current view
-    if (curView)
+    const curView = this.getActive();
+    if (curView) // Can be null at startup
       curView.controls.enabled = false;
 
-    // Switch active view
+    // Switch to active view
     this.activeIdx = viewIndex;
 
     // Set new view default start position and update controls
@@ -181,8 +173,8 @@ class ViewManager {
   update() {
     // Update positions of locked cameras
     this.views.forEach(view => {
-      if (view.lock)
-        view.lock.update();
+      if (view.cameraLock)
+        view.cameraLock.update();
     });
     // Update controls of active camera
     const activeView = this.getActive();
@@ -191,7 +183,7 @@ class ViewManager {
   }
 
   // Lock active camera into a geostationary orbit around the selected object
-  setOrbit(marker, objectToLock) {
+  lockToOrbitView(marker, objectToLock) {
 
     const view = this.getActive();
     const camera = view.camera;
@@ -212,7 +204,7 @@ class ViewManager {
   }
 
   // Setup the camera view for a observer on a planet surface
-  createObserver(marker, eyeHeight, lookAhead) {
+  createObserverView(marker, eyeHeight, lookAhead) {
 
     // Camera postion and target must be in world coordinates
     const cameraPosWorld = new THREE.Vector3(0, eyeHeight, 0);
