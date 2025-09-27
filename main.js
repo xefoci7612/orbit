@@ -20,6 +20,32 @@ function formatDegrees(num) {
   return `${sign}${fixedNum}°`;
 }
 
+// Converts a decimal degree value into DMS (Degrees, Minutes, Seconds)
+function toDMS(deg, isLatitude) {
+  const tags = [['W', 'E'], ['S', 'N']];
+  const dir = tags[isLatitude ? 1 : 0][deg >= 0 ? 1 : 0];
+  const secs = Math.round(Math.abs(deg) * 3600);
+  const [d, r] = [Math.floor(secs / 3600), (secs % 3600)];
+  const [m, s] = [Math.floor(r / 60), (r % 60)];
+  return `${d}° ${m}′ ${s}″ ${dir}`;
+}
+
+// Converts a DMS (Degrees, Minutes, Seconds) string into a decimal degree value
+function fromDMS(dmsString) {
+  // Regex to capture degrees, minutes, seconds, and the direction letter.
+  // It's case-insensitive (/i) and allows for flexible spacing (\s*).
+  const dmsRegex = /(\d+)\s*°\s*(\d+)\s*′\s*(\d+)\s*″\s*([NSEW])/i;
+  const matches = dmsString.match(dmsRegex);
+  if (!matches) { return NaN; }
+
+  // The first element of 'matches' is the full string, which we skip.
+  // The unary '+' operator is a concise way to convert strings to numbers.
+  const [, d, m, s, dir] = matches;
+  const deg = (+d) + (+m / 60) + (+s / 3600);
+  const dirU = dir.toUpperCase();
+  return dirU === 'S' || dirU === 'W'  ? -deg : deg;
+}
+
 const simulation = new Simulation();
 const renderer = simulation.getRenderer();
 
@@ -43,6 +69,8 @@ const elementIds = {
   observerDataGroup: 'observer-data-group',
   azimuthOut: 'azimuth-out',
   elevationOut: 'elevation-out',
+  latitudeOut: 'latitude-out',
+  longitudeOut: 'longitude-out',
 };
 
 const elem = {};
@@ -160,6 +188,40 @@ function camBtnReleased(slotIndex) {
   }
 }
 
+const setEditMode = (element, isFocused) => {
+  element.setAttribute('data-manual-edit', isFocused.toString());
+};
+
+const onLatLonBlur = () => {
+  // When the user clicks from lat to lon, the blur event fires, but the
+  // focus on the new element hasn't happened yet, so use a small timeout
+  setTimeout(() => {
+    // Check if the currently focused element in the entire document is one of our inputs.
+    const isFocusStillOnInputs =
+      document.activeElement === elem.latitudeOut ||
+      document.activeElement === elem.longitudeOut;
+
+    // If focus has truly left the input group, reset edit mode
+    // and commit the changes
+    if (!isFocusStillOnInputs) {
+      setEditMode(elem.latitudeOut, false);
+      setEditMode(elem.longitudeOut, false);
+
+      const latDeg = fromDMS(elem.latitudeOut.value);
+      const lonDeg = fromDMS(elem.longitudeOut.value);
+
+      if (!isNaN(latDeg) && !isNaN(lonDeg)) {
+        simulation.placeObserverAt(latDeg, lonDeg);
+      }
+    }
+  }, 0);
+};
+
+elem.latitudeOut.onfocus = () => setEditMode(elem.latitudeOut, true);
+elem.longitudeOut.onfocus = () => setEditMode(elem.longitudeOut, true);
+elem.latitudeOut.onblur = onLatLonBlur;
+elem.longitudeOut.onblur = onLatLonBlur;
+
 // Bind all camera buttons to click handlers
 document.querySelectorAll('.cam-btn').forEach((b,i)=>{
   const slotIndex = parseInt(b.dataset.slot) - 1;
@@ -252,10 +314,19 @@ function animationLoop() {
   if (events.atRise || events.atSet)
       elem.btnPlay.onclick();
 
+  // If we are in observer view show/set coordinates
   if (events.azEl.length > 0) {
     elem.observerDataGroup.hidden = false;
     elem.azimuthOut.textContent = formatDegrees(events.azEl[0]);
     elem.elevationOut.textContent = formatDegrees(events.azEl[1]);
+
+    // Only update the UI if the user is NOT currently editing the fields
+    const isEditingLat = elem.latitudeOut.getAttribute( 'data-manual-edit') === 'true';
+    const isEditingLon = elem.longitudeOut.getAttribute('data-manual-edit') === 'true';
+    if (!isEditingLat && !isEditingLon) {
+      elem.latitudeOut.value  = toDMS(events.latLon[0], true);
+      elem.longitudeOut.value = toDMS(events.latLon[1], false);
+    }
   } else {
     elem.observerDataGroup.hidden = true;
   }

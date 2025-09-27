@@ -137,7 +137,7 @@ const trackableBodies = [];
 // Tracks state for an observer on a planet
 const observerState = {
     object: null,
-    marker:null,
+    marker:null, // in local coordinates
     observerOnEarth: false,
     moonVisible: false,
     viewIndex: null,
@@ -172,7 +172,8 @@ function attachToSurface(marker, object, surfacePoint) {
   marker.position.copy(surfacePoint);
   object.worldToLocal(marker.position);
   orientToSurface(marker);
-  object.add(marker);
+  if (marker.parent !== object) // in case we just move the marker
+    object.add(marker);
   marker.updateWorldMatrix(true, false);
 }
 
@@ -273,6 +274,35 @@ function enterObserverMode(object, surfacePoint) {
   //addAxesHelper(view.camera, 5);
 
   return viewIndex;
+}
+
+function placeObserverAt(latDeg, lonDeg) {
+
+  const view = views.get(observerState.viewIndex);
+  if (views.getActive() !== view)
+    return;
+
+  const latRad = toRadians(latDeg);
+  const lonRad = toRadians(lonDeg);
+  const radius = observerState.marker.position.length();
+
+  // Convert spherical coordinates to Cartesian (x, y, z) in the planet's local
+  // frame. Y is the polar axis. +X is the prime meridian (0° longitude).
+  // The -z for sine is to match the longitude calculation in getGeoData.
+  const newSurfacePoint = new THREE.Vector3();
+  newSurfacePoint.y = radius * Math.sin(latRad);
+  const xzRadius = radius * Math.cos(latRad); // Radius of the circle at this latitude
+  newSurfacePoint.x = xzRadius * Math.cos(lonRad);
+  newSurfacePoint.z = -xzRadius * Math.sin(lonRad);
+
+  // Move the marker to new surface point and realign its plane
+  // Surface point must be in world coords
+  const object = observerState.object;
+  object.localToWorld(newSurfacePoint)
+  attachToSurface(observerState.marker, object, newSurfacePoint);
+
+  // Camera is already locked to the marker, locking update will
+  // set correct camera and target position at next frame.
 }
 
 function exitObserverMode() {
@@ -538,7 +568,7 @@ const SimClock = class {
 };
 const simClock = new SimClock();
 
-const transientEvents = { atRise: false, atSet: false, azEl: [] };
+const transientEvents = { atRise: false, atSet: false, azEl: [], latLon: [] };
 
 // Animation loop function
 function animate() {
@@ -580,8 +610,8 @@ function animate() {
     // If we are in observer view pass elevation and azimuth
     const view = views.get(observerState.viewIndex);
     const isAct = (view == views.getActive());
-    const azEl = isAct ? view.getTargetAzEl(observerState.marker) : [];
-    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet, azEl: azEl });
+    const { azEl, latLon } = isAct ? view.getGeoData(observerState.marker) : { azEl: [], latLon: []};
+    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet, azEl: azEl, latLon: latLon });
   }
 
   // Update the active controls and render with the active camera
@@ -605,6 +635,7 @@ class Simulation {
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
     this.enterObserverMode = enterObserverMode;
+    this.placeObserverAt = placeObserverAt;
     this.exitObserverMode = exitObserverMode;
     this.pickObject = pickObject;
   }

@@ -156,9 +156,11 @@ class View {
     this.cameraLock = null;
   }
 
-  // Calculates the Azimuth and Elevation of the views's current target point.
-  // The coordinates are in the local reference frame of the marker object.
-  getTargetAzEl(marker) {
+  // Calculates the Azimuth and Elevation of the views's current target point
+  // and Latitude and Longitude of observer position.
+  // The Az+ El are in the local reference frame of the marker object, instead
+  // Lat + Lon are in geocentric coordinate system.
+  getGeoData(marker) {
 
     const targetWorldPos = this.controls.target;
     const targetLocalPos = marker.worldToLocal(tempVec.copy(targetWorldPos));
@@ -181,7 +183,24 @@ class View {
     // growing in a clockwise direction.
     const azimuthRad = Math.PI - azimuthRadMath;
 
-    return [toDegrees(azimuthRad), toDegrees(elevationRad)];
+    // The marker's position is already in the local coordinate system of the
+    // parent object (the planet), which is our geocentric frame.
+    const observerLocalPos = marker.position;
+
+    // Latitude: The angle above or below the body's equatorial (XZ) plane.
+    // We use asin(y / radius).
+    const latitudeRad = Math.asin(observerLocalPos.y / observerLocalPos.length());
+
+    // Longitude: The angle around the polar (Y) axis in the equatorial plane.
+    // We assume the prime meridian (0° longitude) is along the parent's +X axis.
+    // Using atan2(-z, x) gives a clockwise angle from +X, matching the convention
+    // where East longitudes are positive.
+    const longitudeRad = Math.atan2(-observerLocalPos.z, observerLocalPos.x);
+
+    return {
+      azEl: [toDegrees(azimuthRad), toDegrees(elevationRad)],
+      latLon: [toDegrees(latitudeRad), toDegrees(longitudeRad)]
+    };
   }
 };
 
