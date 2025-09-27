@@ -13,6 +13,13 @@ const toTimeStr = d => d.toISOString().slice(11, 11 + 5); // HH:mm
 const sliderToSpeed = v => Number(v) * Number(v) / 2.5;
 const speedToSlider = v => Math.sqrt(Math.abs(v * 2.5));
 
+// Formats a number like "+45.1°" or "-8.5°"
+function formatDegrees(num) {
+  const fixedNum = num.toFixed(1);
+  const sign = num >= 0 ? '+' : '';
+  return `${sign}${fixedNum}°`;
+}
+
 const simulation = new Simulation();
 const renderer = simulation.getRenderer();
 
@@ -33,6 +40,9 @@ const elementIds = {
   observerBtn: 'observer-btn',
   observerCam: 'observer-cam',
   loaderOverlay: 'loader-overlay',
+  observerDataGroup: 'observer-data-group',
+  azimuthOut: 'azimuth-out',
+  elevationOut: 'elevation-out',
 };
 
 const elem = {};
@@ -190,11 +200,12 @@ function sceneDoubleClicked(mouseX, mouseY) {
   const hit = simulation.pickObject(mouseX, mouseY);
   if (!hit)
     return;
+
   // Clicked again on the already locked object?
-  if (simulation.isLocked(hit.object)) {
+  if (simulation.isOrbitLocked(hit.object)) {
     simulation.unlockCamera();
     elem.linkIndicator.classList.remove('active');
-  } else {
+  } else if (!simulation.isObserverView()) {
     simulation.lockToOrbit(hit.object, hit.point);
     elem.linkIndicator.classList.add('active');
   }
@@ -240,6 +251,14 @@ function animationLoop() {
   // Events detected during simulation step
   if (events.atRise || events.atSet)
       elem.btnPlay.onclick();
+
+  if (events.azEl.length > 0) {
+    elem.observerDataGroup.hidden = false;
+    elem.azimuthOut.textContent = formatDegrees(events.azEl[0]);
+    elem.elevationOut.textContent = formatDegrees(events.azEl[1]);
+  } else {
+    elem.observerDataGroup.hidden = true;
+  }
 
   // Sync UI elements to new state
   updateDateTimeUI();

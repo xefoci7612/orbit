@@ -50,6 +50,10 @@
       pointer-events: auto;
     }
     .hud__group { display: flex; align-items: center; gap: 8px; }
+    /* This new rule is specific enough to override the display:flex rule */
+    .hud__group[hidden] {
+      display: none;
+    }
     input, button {
       font: inherit; color: inherit; background: var(--color-primary);
       border: 1px solid var(--color-border);
@@ -60,7 +64,7 @@
     input[type=range] { width: 90px; accent-color: var(--color-primary); background: var(--color-primary); }
     #speed-out { width: 58px; text-align: right; }
     /* camera row */
-    .hud__cam { justify-content: flex-start; gap: 6px; }
+    .hud__cam { justify-content: space-between; gap: 6px; }
     .cam-btn { width: 32px; opacity: var(--opacity-disabled); }
     .cam-btn.saved {
       opacity: var(--opacity-enabled);
@@ -142,12 +146,25 @@
 
   <!-- Second row: camera snapshots -->
   <div class="hud__row hud__cam" id="cam-row">
-    <button class="cam-btn" data-slot="1">1</button>
-    <button class="cam-btn" data-slot="2">2</button>
-    <button class="cam-btn" data-slot="3">3</button>
-    <button id="observer-btn" title="Place Observer">📍</button>
-    <button id="observer-cam" class="cam-btn" data-slot="4" hidden>4</button>
-    <div id="link-indicator" title="Camera linked">🔒</div>
+    <!-- Group 1: Left-aligned buttons -->
+    <div class="hud__group">
+      <button class="cam-btn" data-slot="1">1</button>
+      <button class="cam-btn" data-slot="2">2</button>
+      <button class="cam-btn" data-slot="3">3</button>
+      <button id="observer-btn" title="Place Observer">📍</button>
+      <button id="observer-cam" class="cam-btn" data-slot="4" hidden>4</button>
+    </div>
+
+    <!-- Group 2: Centered Observer Data (Initially Hidden) -->
+    <div id="observer-data-group" class="hud__group" hidden>
+        <label>Az: <output id="azimuth-out"></output></label>
+        <label>El: <output id="elevation-out"></output></label>
+    </div>
+
+    <!-- Group 3: Right-aligned lock indicator -->
+    <div class="hud__group">
+        <div id="link-indicator" title="Camera linked">🔒</div>
+    </div>
   </div>
 </div>
 

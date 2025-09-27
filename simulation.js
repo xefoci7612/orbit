@@ -259,18 +259,18 @@ function enterObserverMode(object, surfacePoint) {
   observerState.moonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
 
   // Create a new observer view placed on marker
-  const eyeHeight = toUnits( 20); // km above surface
+  const eyeHeight = toUnits(5); // km above surface
   const lookAhead = toUnits(100); // look at km ahead on horizon
   const viewIndex = views.createObserverView(marker, eyeHeight, lookAhead);
   observerState.viewIndex = viewIndex;
 
   // Lock the view camera on the marker
   const view = views.get(viewIndex);
-  view.lockTo(marker);
+  view.lockTo(marker, true);
 
   // DEBUG
-  addAxesHelper(marker, 10);
-  addAxesHelper(view.camera, 5);
+  //addAxesHelper(marker, 10);
+  //addAxesHelper(view.camera, 5);
 
   return viewIndex;
 }
@@ -538,7 +538,7 @@ const SimClock = class {
 };
 const simClock = new SimClock();
 
-const transientEvents = { atRise: false, atSet: false };
+const transientEvents = { atRise: false, atSet: false, azEl: [] };
 
 // Animation loop function
 function animate() {
@@ -576,7 +576,12 @@ function animate() {
     const atRaise =  isMoonVisible && !observerState.moonVisible;
     const atSet   = !isMoonVisible &&  observerState.moonVisible;
     observerState.moonVisible = isMoonVisible;
-    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet });
+
+    // If we are in observer view pass elevation and azimuth
+    const view = views.get(observerState.viewIndex);
+    const isAct = (view == views.getActive());
+    const azEl = isAct ? view.getTargetAzEl(observerState.marker) : [];
+    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet, azEl: azEl });
   }
 
   // Update the active controls and render with the active camera
@@ -620,8 +625,11 @@ class Simulation {
     simClock.reset();
     views.setDefault();
   }
-  isLocked(object) {
-    const lockedObjects = views.getAllLockedObjects();
+  isObserverView() {
+    return views.getActive() === views.get(observerState.viewIndex);
+  }
+  isOrbitLocked(object) {
+    const lockedObjects = views.getOrbitLockedObjects();
     return lockedObjects.includes(object);
   }
   unlockCamera() {
