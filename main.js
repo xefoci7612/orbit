@@ -30,20 +30,32 @@ function toDMS(deg, isLatitude) {
   return `${d}° ${m}′ ${s}″ ${dir}`;
 }
 
-// Converts a DMS (Degrees, Minutes, Seconds) string into a decimal degree value
-function fromDMS(dmsString) {
-  // Regex to capture degrees, minutes, seconds, and the direction letter.
-  // It's case-insensitive (/i) and allows for flexible spacing (\s*).
-  const dmsRegex = /(\d+)\s*°\s*(\d+)\s*′\s*(\d+)\s*″\s*([NSEW])/i;
-  const matches = dmsString.match(dmsRegex);
-  if (!matches) { return NaN; }
+// Converts a DMS (Degrees, Minutes, Seconds) or a generic value string
+// into a decimal degree value
+function fromDMS(valueString) {
+  let numericStr = valueString.trim();
 
-  // The first element of 'matches' is the full string, which we skip.
-  // The unary '+' operator is a concise way to convert strings to numbers.
-  const [, d, m, s, dir] = matches;
-  const deg = (+d) + (+m / 60) + (+s / 3600);
-  const dirU = dir.toUpperCase();
-  return dirU === 'S' || dirU === 'W'  ? -deg : deg;
+  // Decimal only case (assume to be degrees)
+  if (!numericStr.match(/[°'′"″NSEW]/i))
+      return parseFloat(numericStr);
+
+  // Determine sign and clean the string
+  const sign = numericStr.match(/[SW]/i) ? -1 : 1;
+  numericStr = numericStr.replace(/[NSEW]/i, '');
+
+  // DMS parsing
+  const matches = [];
+  matches.push(numericStr.match(/([\d\.]+)\s*°/));    // Degrees
+  matches.push(numericStr.match(/([\d\.]+)\s*['′]/)); // Minutes
+  matches.push(numericStr.match(/([\d\.]+)\s*["″]/)); // Seconds
+
+  // Accumulate the total seconds
+  const k = [3600, 60, 1];
+  const totalSeconds = matches.reduce((total, match, index) => {
+    return total + (match ? parseFloat(match[1]) * k[index] : 0);
+  }, 0);
+
+  return (Math.abs(totalSeconds) / 3600) * sign; // secs to degrees
 }
 
 const simulation = new Simulation();
@@ -236,11 +248,12 @@ function dateTimeChanged() {
 }
 
 function updateDateTimeUI() {
-  const [date, elapsedMsec] = simulation.getDate();
+  const currentTime = simulation.getTime();
+  const date = new Date(currentTime);
   elem.simDate.value = toDateStr(date);
   elem.simTime.value = toTimeStr(date);
-  const elapsedDays = elapsedMsec / (24 * 3600 * 1000);
-  elem.simElapsed.textContent = (elapsedDays).toFixed(1)+' d';
+  //const elapsedDays = elapsedMsec / (24 * 3600 * 1000);
+  //elem.simElapsed.textContent = (elapsedDays).toFixed(1)+' d';
 }
 
 function speedSliderChanged() {
@@ -346,6 +359,5 @@ window.addEventListener('load', () => {
   });
 
   // Start animation loop after all is loaded
-  simulation.setDate(new Date()); // now
   animationLoop();
 });

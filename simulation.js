@@ -1,19 +1,65 @@
+'use strict';
+
 /*
   TODO:
     - When locked reset return to "at lock time" position
-    - Look at sign in moon position computation
     - Show sun/raise events with a fading side legend
-    - implement view from observer
 */
 
-'use strict';
+
+/*
+    Ecliptic J2000 Frame according to the International Celestial Reference System (ICRS)
+
+    J2000 Frame uses a standard heliocentric, right-handed coordinate system to
+    model the Solar System's geometry.
+
+    EPOCH (J2000.0):
+        The reference frame is fixed to a specific moment: January 1, 2000, at 12:00
+        Terrestrial Time (TT), which is Julian Date 2451545.0 TT.
+
+    ORIGIN:
+        The formal origin (0,0,0) is the Barycenter of the Solar System
+
+    THE FUNDAMENTAL PLANE (THE XY PLANE):
+        This is the Earth's mean orbital plane as it existed at the J2000.0 epoch,
+        also known as the "Ecliptic of J2000.0".
+        - SIMPLIFICATION: We assume this plane is fixed and does not change over time.
+
+    AXES DEFINITION:
+      +X Axis: Points from the Sun towards the Vernal Equinox as it was at the J2000.0
+               epoch. This is the principal direction of the reference frame.
+
+      +Z Axis: Points towards the North Ecliptic Pole at the J2000.0 epoch. It is
+               perpendicular to the XY plane, with its direction given by the right-hand
+               rule (curling fingers in the direction of Earth's orbit makes the
+               thumb point towards +Z).
+
+      +Y Axis: Completes the right-handed coordinate system (X × Y = Z). This axis
+               points towards the Summer Solstice direction. At the Vernal Equinox,
+               the +Y axis has same direction as Earth's velocity.
+
+   In this simulation we use a Geocentric Ecliptic coordinate system (referred as
+   World Coordinates) adapted to Three.js conventions:
+
+   ORIGIN: The formal origin (0,0,0) is the Earth center
+
+   +X Axis: Parallel and with OPPOSITE direction of +X Axis in J2000 Frame, i.e. at
+            J2000.0 Vernal Equinox it points from Earth toward Sun.
+
+   +Y Axis: Parallel and with same direction of +Z Axis in J2000 Frame (UP)
+
+   +Z Axis: Completes the right-handed coordinate system of Three.js (X × Y = Z where
+            X is toward left, Y up and Z toward the screen). Parallel and with
+            same direction to +Y axis in the Ecliptic J2000 Frame.
+
+  Because UP axes +Y/+Z have same direction, due to right-hand-rule for rotations,
+  a physical rotation of the Earth by an angle 'alpha' around the Sun in the
+  heliocentric J2000 frame is mathematically equivalent to a rotation of the
+  Sun by the same angle 'alpha' around the Earth in our geocentric World frame.
+*/
 
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
-
-// ============================================================================
-// CONSTANTS AND HELPER FUNCTIONS
-// ============================================================================
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
 const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
@@ -29,19 +75,21 @@ const SKY_TEXTURE_URL = [  // In celestial coordinates from https://svs.gsfc.nas
 // Physical properties (in kilometers, converted to scene units)
 const EARTH_RADIUS_KM = 6371; // Conventional radius for sphere approx.
 const MOON_RADIUS_KM = 1737.53;
-const MOON_DISTANCE_KM = 384400;
-const EARTH_AXIAL_TILT = 23.44; // degrees
-const MOON_AXIAL_TILT = 6.68; // degrees
+const MOON_DISTANCE_KM = 384400;    // average
+const EARTH_AXIAL_TILT = 23.439291; // degrees
+const MOON_AXIAL_TILT = 6.68;       // degrees
 
-// Scale conversion constants
-const KM_PER_UNIT = EARTH_RADIUS_KM / 10; // Earth radius is 10 units in this scale
+// Scale conversions
+const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
 const toUnits = km => km / KM_PER_UNIT;
 const toRadians = degrees => degrees * Math.PI / 180;
-
-const HORIZON_REFRACTION = toRadians(34.5 / 60); // Standard atmospheric refraction in arcminutes
+const HMSToRadians = s => s.split(/\s+/).reduce((acc, v, i) => acc + parseFloat(v) / [1, 60, 3600][i], 0) * (Math.PI / 12);
 
 // Time constants for simulation
 const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
+
+// Master Epoch of JPL data sources
+const MASTER_EPOCH = new Date('2025-09-10T09:34:03Z');
 
 const HOUR = 3600; // In SI seconds
 const SOLAR_DAY = 24 * HOUR; // Mean Solar Day
@@ -50,49 +98,74 @@ const JULIAN_YEAR = 365.25 * SOLAR_DAY;
 const SIDERAL_DAY = 23.9344696 * HOUR; // Period of a 360 degrees rotation
 const SIDEREAL_YEAR = 365.256363004 * SOLAR_DAY; // For epoch J2000.0
 
-const EARTH_ROTATION_PERIOD = SIDERAL_DAY;
-const EARTH_ORBITAL_PERIOD = SIDEREAL_YEAR;
 const EARTH_PRECESSION_PERIOD = 25772 * JULIAN_YEAR;
-const MOON_ORBITAL_PERIOD = 27.554551 * SOLAR_DAY; // Anomalistic period
 const MOON_NODE_PRECESSION_PERIOD = 18.612815932 * JULIAN_YEAR;
 
-// Helpers to calculate date differences
-function daysSinceSolstice(targetDate) {
-  const year = targetDate.getFullYear();
-  // The Summer Solstice in 2025 occurs on June 21 at 03:42 UTC.
-  // We use this precise time as our "zero angle" reference point.
-  const solstice = new Date(Date.UTC(year, 5, 21, 3, 42, 0));
-  return (targetDate - solstice) / (1000 * 60 * 60 * 24); // Convert milliseconds to days
-}
-
-// Our reference date is September 10, 2025
-const REFERENCE_DATE = new Date('2025-09-10T00:00:00Z');
-const DAYS_SINCE_SOLSTICE = daysSinceSolstice(REFERENCE_DATE);
+// Standard atmospheric refraction in arcminutes
+const HORIZON_REFRACTION = toRadians(34.5 / 60);
 
 /*
-    Init all orbital parameters out of JPL Horizons data for September 10, 2025
+    Moon and Earth Ephemeris from JPL Horizons
+
     https://ssd.jpl.nasa.gov/horizons/app.html
 
-    Reference frame : Ecliptic of J2000.0
+    The raw `DATA` values (IN, OM, W, etc.) were generated by JPL Horizons
+    using a GEOCENTRIC reference frame for Moon and heliocentric for Earth.
+    The values are referenced to the Ecliptic and Mean Equinox of J2000.
 
-    Origin: The center of the Earth
+    The simulation uses a nested hierarchy of Object3D nodes to build the Moon's
+    orbit around a fixed Earth at (0,0,0). The final, outermost coordinate system
+    (defined by the `moonOrbit` object) has the following properties:
 
-    Fundamental Plane: The Earth's mean orbital plane (the ecliptic) as it was at the J2000.0 epoch.
+    - ORIGIN: The center of the Earth.
 
-    Z-axis: A line perpendicular to this ecliptic plane, pointing north.
+    - FUNDAMENTAL PLANE: The local XZ plane of the `moonOrbit` object represents
+      the Moon's own orbital plane.
 
-    X-axis: This primary direction points towards the vernal equinox, the point where the Sun crosses
-            the celestial equator from south to north—as it was at the J2000.0 epoch.
+    - LOCAL +X AXIS: This is the principal direction, defined as the "line of nodes".
+      It points from the Earth towards the Ascending Node of the Moon's orbit.
 
-    Y-axis: 90° ahead of the X-axis in the direction of Earth's orbit around the Sun.
+    - LOCAL +Y AXIS: Perpendicular to the Moon's orbital plane, pointing towards
+      the Moon's orbital north pole. Moon orbits in counter-clockwise direction,
+      so with positive angle, around this axis.
+
+    - LOCAL +Z AXIS: Completes the right-handed system (X × Y = Z). In particular
+      when Moon is at Ascending Node, the Moon's velocity vector is perpendicular
+      to X-axis and the +Z axis is in the OPPOSITE direction of Moon orbit direction.
+
+    Key differences compared with JPL ephemeris source data are:
+
+    - "UP" AXIS: The simulation's geocentric frame uses the Ecliptic North Pole as
+      its primary +Y ("Up") axis. The Moon's orbital plane is inclined relative to
+      this. The JPL frame uses +Z as the Ecliptic North Pole.
+
+    - PRINCIPAL DIRECTION: The simulation's local frame uses the Ascending Node
+      as its +X axis. The JPL frame uses the J2000 Vernal Equinox as its +X axis.
+      The simulation applies the "Longitude of the Ascending Node" (`OM`) as a
+      rotation around the Ecliptic Pole (+Y) to correctly orient our local
+      frame's +X axis relative to the Vernal Equinox.
 */
+
 const MOON_DATA = {
-  SemiMajorAxis: toUnits(384821.4581097544), // in km
-  EC: 0.05212487669881421,          // eccentricity
-  IN: toRadians(5.280240463394533), // inclination relative to ecliptic
-  OM: toRadians(347.9713278613414), // longitude of the Ascending Node
-   W: toRadians(37.57619864565795), // argument of periapsis (perigee)
-  MA: toRadians(352.7811711299613), // mean anomaly
+     A: toUnits(3.848214581097544E+05),   // km (Semi-major Axis)
+    EC: 5.212487669881421E-02,            // eccentricity
+    IN: toRadians(5.280240463394533E+00), // inclination relative to ecliptic
+    OM: toRadians(3.479713278613414E+02), // longitude of the Ascending Node
+     W: toRadians(3.757619864565795E+01), // argument of periapsis (perigee)
+    MA: toRadians(7.092828128683312E+00), // mean anomaly
+    PR: 2.348608891413124E+06,            // orbital period in seconds
+};
+
+const EARTH_DATA = {
+     A: toUnits(1.494830834194617E+08),
+    EC: 1.676617060159998E-02,
+    IN: toRadians(5.309273646886771E-03),
+    OM: toRadians(1.712802847305776E+02),
+     W: toRadians(2.944120698115610E+02),
+    MA: toRadians(2.435990102008265E+02),
+    PR: 3.152183743256430E+07,
+
+    L_Ap_Sid_Time: HMSToRadians("08 52 45.4526"), // Greenwich Apparent Sidereal Time (GAST)
 };
 
 // ============================================================================
@@ -101,10 +174,10 @@ const MOON_DATA = {
 
 // Create renderer and scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(innerWidth, innerHeight); // Full viewport
 document.body.appendChild(renderer.domElement);
-const scene = new THREE.Scene();
 const cubeTextureLoader = new THREE.CubeTextureLoader();
+const scene = new THREE.Scene();
 scene.background = cubeTextureLoader.load(SKY_TEXTURE_URL);
 
 // Ambient light for overall scene illumination
@@ -113,15 +186,14 @@ scene.add(ambientLight);
 
 // Directional light to simulate sunlight
 const sunLight = new THREE.DirectionalLight(0xffffff, 1);
-const sunDistance = toUnits(100 * MOON_DISTANCE_KM);
-sunLight.position.set(sunDistance, 0, 0); // on the ecliptic plane +X axis
+sunLight.position.set(1, 0, 0); // just for setting target with lookAt() FIXME remove
 sunLight.lookAt(0, 0, 0);
 scene.add(sunLight);
 
-// Set the default view
+// Initial camera view that is also the default one
 const defaultCameraPos = (function() {
   const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
-  const cameraAzimuth = toRadians(180); // Degrees clockwise from +Z axis
+  const cameraAzimuth = toRadians(180);  // Degrees clockwise from +Z axis
   const cameraElevation = toRadians(10); // Degrees above horizontal plane
   return new THREE.Vector3(
     cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth),
@@ -131,8 +203,150 @@ const defaultCameraPos = (function() {
 })();
 const views = new ViewManager(scene, renderer, defaultCameraPos);
 
+
+// Earth hierarchy
+//
+// The innermost node performs daily rotation around its pole axis
+const textureLoader = new THREE.TextureLoader();
+const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
+const earth = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
+  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
+);
+
+// Add a parent to tilt vertical axis and slowly rotate it for precession
+const tiltedEarth = new THREE.Object3D();
+tiltedEarth.add(earth);
+
+// Add Earth hierarchy to the scene
+scene.add(tiltedEarth);
+
+
+// Moon hierarchy
+//
+// The innermost node performs rotation around its pole axis
+const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
+  new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
+);
+
+// Add a parent to tilt vertical axis and rotate it for precession
+const tiltedMoon = new THREE.Object3D();
+tiltedMoon.add(moon);
+
+// Add parent to set a fixed inclined orbital path, this is the target
+// when setting current moon position in animation
+const moonOrbit = new THREE.Object3D();
+moonOrbit.add(tiltedMoon);
+
+// Create an elliptical curve for the Moon's orbit in its orbital plane
+const [points, rAsc, rDes] = ellipticCurve(MOON_DATA.A, MOON_DATA.EC, MOON_DATA.W);
+const vertexBuffer = new THREE.BufferAttribute(points, 3);
+const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
+const orbitMaterial = new THREE.LineBasicMaterial({
+  color: 0x4488ff, // light blue
+  transparent: true,
+  opacity: 0.35
+});
+const orbitPath = new THREE.LineLoop(orbitGeometry, orbitMaterial);
+moonOrbit.add(orbitPath);
+
+// Add parent to follow the Moon's orbit nodal precession (swivel)
+const ascendingNodePivot = new THREE.Object3D();
+ascendingNodePivot.add(moonOrbit);
+
+// Add Moon hierarchy to the scene
+scene.add(ascendingNodePivot);
+
+// ============================================================================
+// INITIAL POSITIONS SETUP
+// ============================================================================
+
+// Earth Prime Meridian at master epoch time
+//
+// Earth Texture map is loaded already centered on 0° longitude, i.e. the Prime
+// Meridian intercept the +X axis on the equator in our earth object local reference.
+// We convert the Greenwich Apparent Sidereal Time (GAST) at master epoch into
+// a positive rotation along +Y axis (North Pole)
+const InitialEarthY = EARTH_DATA.L_Ap_Sid_Time;
+
+// Earth's obliquity (axial tilt) at Vernal Equinox
+//
+// The Earth's tilt axis at equinox time is perpendicular to the world X axis.
+// So to tilt the axis we rotate around x-axis. The tilt must be directed towards
+// the Winter Solstice (so that at Summer Solstice the North Pole will be tilted
+// toward the sun), the positive +X axis points toward the Sun and the rotation
+// is clockwise (negative).
+const InitialTiltedEarthX = -toRadians(EARTH_AXIAL_TILT);
+
+// Moon rotation
+//
+// Moon is in tidal locking, meaning it rotates on its axis at the same rate it orbits
+// around Earth, which causes the same side to always face us.
+// Moon Texture map is loaded centered on 0° longitude, the Prime Meridian of the Moon
+// is aligned with its local +X axis.
+// Moon's world frame is Earth centered and its +X axis is the direction from Earth to the
+// Ascending Node.
+// When the Moon is at the Ascending Node the 0° longitude will be on the far side
+// of the Moon, so we need to rotate around +Y axis of 180 degree to move it facing Earth.
+// Because of tidal locking, after initial offset the animation will always keep it facing Earth.
+const InitialMoonY = Math.PI;
+
+// Moon's obliquity (axial tilt)
+//
+// Cassini's 3rd Law dictates that the Moon's spin axis, its orbital pole,
+// and the Ecliptic Pole are always coplanar. This has a practical consequence:
+// the Moon's axial tilt is applied in the same plane as its orbital inclination.
+//
+// 1. The Moon's orbit is inclined by rotating the `moonOrbit` object around its
+//    local X-axis (the line of nodes).
+//
+// 2. Therefore, the Moon's axial tilt must ALSO be a rotation around the local
+//    X-axis of its parent frame (`moonOrbit`).
+//
+// Cassini's 3rd Law states also that pole of ecliptic (~1.54°) is always *between*
+// the 2 poles of orbit (~5.1°) and spin (~6.68°), so the Moon's spin axis is "tilted
+// back" from its orbital plane. This means the axial tilt rotation is in the OPPOSITE
+// direction to the orbital inclination rotation.
+// We apply this by rotating the tiltedMoon node around its local X-axis, which is
+// the same axis as its parent's rotation but with an opposite sign.
+const InitialTiltedMoonX = -toRadians(MOON_AXIAL_TILT);
+
+// Moon's orbit inclination to Ecliptic
+//
+// The Ascending Node is the point where Moon's orbit crosses the Ecliptic plane.
+// After passing the Ascending Node, the Moon "ascends" into the Northern
+// Ecliptic hemisphere (i.e., its world Y-coordinate becomes positive).
+// The local +X axis of this `moonOrbit` points to the Ascending Node.
+// The Moon's orbit is positive counter-clockwise (prograde) and at ascending node
+// it moves toward -Z.
+// A positive (counter-clockwise) rotation around the local +X axis will rotate
+// the local -Z axis towards the world +Y axis. This correctly lifts the subsequent
+// part of the orbit into the positive ("North") direction, achieving the "ascending"
+// motion.
+const InitialMoonOrbitX = MOON_DATA.IN;
+
+// Moon's orbital plane orientation (Longitude of the Ascending Node)
+//
+// The line of nodes for the Moon's orbit precesses in a retrograde (backward)
+// direction, which is the opposite to the Moon's forward motion around the Earth.
+// The longitude of the Ascending Node (OM) from JPL specifies the orientation
+// of the Moon's orbital plane within the fixed Geocentric J2000 Ecliptic frame.
+//
+// This angle is measured eastward (counter-clockwise) from the frame's principal
+// direction (the Vernal Equinox, our World +X axis) to the Ascending Node.
+//
+// To apply this, we rotate the `ascendingNodePivot` object around the World +Y
+// axis (the Ecliptic North Pole) by the value of OM. No further correction
+// for the Earth's position in its orbit is needed, as OM is already an
+// absolute angle in this fixed reference frame.
+const InitialAscendingNodePivotY = MOON_DATA.OM;
+
+// **********************************************************************
+
 // List of objects that can have a locked view on them
-const trackableBodies = [];
+const trackableBodies = [earth, moon];
 
 // Tracks state for an observer on a planet
 const observerState = {
@@ -159,6 +373,7 @@ function createMarker(radius, color) {
   );
 }
 
+// Release marker resources
 function disposeMarker(marker) {
   marker.geometry.dispose();
   marker.material.dispose();
@@ -177,7 +392,7 @@ function attachToSurface(marker, object, surfacePoint) {
   marker.updateWorldMatrix(true, false);
 }
 
-// Orients the local coordinate frame of an object on the surface of a parent body
+// Orient the local coordinate frame of an object on the surface of a parent body
 function orientToSurface(marker) {
 
     // Point on the surface must be in parent coordinates
@@ -206,7 +421,7 @@ function orientToSurface(marker) {
     marker.quaternion.setFromRotationMatrix(rotationMatrix);
 }
 
-// Returns any trackable object under mouse
+// Return any trackable object under mouse
 function pickObject(mouseX, mouseY) {
 
   const raycaster = new THREE.Raycaster();
@@ -231,7 +446,7 @@ function pickObject(mouseX, mouseY) {
   };
 }
 
-// Locks the camera into a geostationary orbit around the selected object
+// Lock the camera into a geostationary orbit around the selected object
 function lockToOrbit(objectToLock, surfacePoint) {
 
   // Set a marker in local coordinates on object's surface point
@@ -269,13 +484,10 @@ function enterObserverMode(object, surfacePoint) {
   const view = views.get(viewIndex);
   view.lockTo(marker, true);
 
-  // DEBUG
-  //addAxesHelper(marker, 10);
-  //addAxesHelper(view.camera, 5);
-
   return viewIndex;
 }
 
+// Move the marker to a new position on planet surface
 function placeObserverAt(latDeg, lonDeg) {
 
   const view = views.get(observerState.viewIndex);
@@ -305,6 +517,7 @@ function placeObserverAt(latDeg, lonDeg) {
   // set correct camera and target position at next frame.
 }
 
+// Drop observer view and release relative resources
 function exitObserverMode() {
   const view = views.get(observerState.viewIndex);
   view.unlock();
@@ -321,21 +534,28 @@ function exitObserverMode() {
 // CELESTIAL BODY CREATION
 // ============================================================================
 
-/* WARNING: By default Three.js applies rotations in XYZ order. We use nested
-   Object3D containers to apply rotations in a different order.
-
-   Three.js coordinate system is +X right, +Y up, +Z toward camera
+/*
+  Setup a hierarchy of 3D Objects to apply rotations in an independent order
+  withouth the limitation of the fixed XYZ order by default Three.js
 */
 
-// Computes an array of 3D vertex on an elliptic curve in XZ plane with
-// Earth at (0,0,0). The local X-axis represents the "line of nodes,"
-// and the positive direction (+X, 0, 0) points directly at the ascending node.
-function ellipticCurve(SemiMajorAxis, EC, W) {
+// Computes an array of 3D vertex on an elliptic curve in the Moon's orbital plane.
+// The Earth is at the origin (0,0,0). The function's output coordinate system is
+// designed to match the local frame of the `moonOrbit` node it will be attached to.
+//
+// - The local +X axis represents the "line of nodes," pointing to the Ascending Node.
+// - The local XZ plane represents the Moon's orbital plane.
+// - In the `moonOrbit`'s right-handed local frame (where +X=Ascending Node and
+//   +Y=North Ecliptic Pole), prograde (counter-clockwise) motion from the
+//   Ascending Node proceeds into the NEGATIVE Z direction.
+//
+// To model this physical reality, the z-coordinate is calculated as -r * sin(angle).
+function ellipticCurve(A, EC, W) {
   const SEGMENTS = 360;
   const points = new Float32Array(SEGMENTS * 3);
 
   // Distance from Earth given true anomaly ta (ellipse polar equation)
-  const distance = ta => SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+  const distance = ta => A * (1 - EC * EC) / (1 + EC * Math.cos(ta));
 
   // Loop starts at perigee (W) when i = 0, and angle 0 (ta = -W)
   // corresponds to the ascending node.
@@ -345,7 +565,7 @@ function ellipticCurve(SemiMajorAxis, EC, W) {
     const angle = ta + W; // angle from ascending node
     points[i*3 + 0] = r * Math.cos(angle); // x
     points[i*3 + 1] = 0;                   // y  (on orbital plane)
-    points[i*3 + 2] = r * Math.sin(angle); // z
+    points[i*3 + 2] = -r * Math.sin(angle); // -z due to parent local frame
   }
 
   // Find ascending and descending nodes x-axis coordinates
@@ -353,61 +573,6 @@ function ellipticCurve(SemiMajorAxis, EC, W) {
   const rDes = distance(-W + Math.PI);
   return [points, rAsc, rDes];
 }
-
-// Create Earth hierarchy
-// The innermost node performs daily rotations around pole axis
-// Earth texture map is already centered on 0° longitude.
-const textureLoader = new THREE.TextureLoader();
-const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
-const earth = new THREE.Mesh(
-  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
-  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
-);
-trackableBodies.push(earth); // has to be a mesh object
-
-// Add parent to tilt and rotate vertical axis for precession
-const tiltedEarth = new THREE.Object3D();
-// Set the Earth's obliquity (axial tilt).
-// At summer solstice the North Pole must be tilted towards the Sun.
-// In Three.js coordinate system (+X right, +Y up, +Z toward camera),
-// when Sun is on the +X axis, a negative (clockwise) rotation around
-// the Z-axis correctly tilts the Earth's North Pole towards the sun.
-tiltedEarth.rotation.z = -toRadians(EARTH_AXIAL_TILT);
-tiltedEarth.add(earth);
-
-// Create Moon hierarchy, each node performs at most one rotation
-// Starting from the innermost node, the moon mesh that performs
-// rotation around its axis. Texture map is already centered on
-// 0° longitude.
-const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
-const moon = new THREE.Mesh(
-  new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
-  new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
-);
-
-// Add parent to tilt and rotate vertical axis for precession
-const tiltedMoon = new THREE.Object3D();
-tiltedMoon.rotation.z = toRadians(MOON_AXIAL_TILT); // FIXME initial offset missing
-tiltedMoon.add(moon);
-trackableBodies.push(moon);
-
-// Add parent to set a fixed inclined orbital path, this is the target when setting
-// current moon position in animation (through moonAxis object)
-const moonOrbit = new THREE.Object3D();
-moonOrbit.rotation.x = MOON_DATA.IN; // inclination to ecliptic
-moonOrbit.add(tiltedMoon);
-
-// Create an elliptical curve for the Moon's orbit in its orbital plane
-const [points, rAsc, rDes] = ellipticCurve(MOON_DATA.SemiMajorAxis, MOON_DATA.EC, MOON_DATA.W);
-const vertexBuffer = new THREE.BufferAttribute(points, 3);
-const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
-const orbitMaterial = new THREE.LineBasicMaterial({
-  color: 0x4488ff, // light blue
-  transparent: true,
-  opacity: 0.35
-});
-const orbitPath = new THREE.LineLoop(orbitGeometry, orbitMaterial);
-moonOrbit.add(orbitPath);
 
 // Setup the node markers corresponding to ascending/descending nodes
 function getMarker(color, position) {
@@ -421,30 +586,19 @@ function getMarker(color, position) {
 moonOrbit.add(getMarker(0xff00ff, [+rAsc, 0, 0])); // Magenta
 moonOrbit.add(getMarker(0xffff00, [-rDes, 0, 0])); // Yellow
 
-// Add parent to follow the Moon's orbit nodal precession (swivel)
-const ascendingNodePivot = new THREE.Object3D();
-ascendingNodePivot.add(moonOrbit);
-
-// Finally add Moon and Earth hierarchy to scene
-scene.add(ascendingNodePivot);
-scene.add(tiltedEarth);
-
 // ============================================================================
 // CELESTIAL BODY RUNTIME COMPUTATIONS
 // ============================================================================
 
-/**
- * Solves Kepler's Equation M = E - e * sin(E) for the Eccentric Anomaly (E).
- * Uses the Newton-Raphson iterative method.
- *
- * @param {number} M - The Mean Anomaly in radians.
- * @param {number} e - The eccentricity of the orbit.
- * @returns {number} The Eccentric Anomaly (E) in radians.
- */
+
+// Solves Kepler's Equation for Eccentric Anomaly (E) with
+// the Newton-Raphson iterative method
 function solveKepler(M, e) {
-  let E = M; // Initial guess for E is M
+
+  // Kepler's Equation is: M = E - e * sin(E)
   const maxIterations = 10;
   const tolerance = 1e-6; // A small tolerance for accuracy
+  let E = M; // Initial guess for E is M
 
   for (let i = 0; i < maxIterations; i++) {
     const f = E - e * Math.sin(E) - M; // The function we want to find the root of
@@ -459,28 +613,64 @@ function solveKepler(M, e) {
   return E;
 }
 
-function getMoonPosition(elapsedTime) {
+// Return orbital parameters from ellipse's focus PV
+function solveOrbit(elapsedTime, bodyData) {
 
-  // Calculate current Mean Anomaly (M) and Eccentric Anomaly (E)
-  const n = 2 * Math.PI / MOON_ORBITAL_PERIOD; // Mean motion (rad/sec)
-  const M = MOON_DATA.MA - n * elapsedTime; // Current Mean Anomaly
-  const EC = MOON_DATA.EC;
-  const E = solveKepler(M, EC); // Kepler's Second Law
+  // Solve Kepler's equation to get Eccentric Anomaly (E), angle from
+  // ellipse center if orbit was a circle, out of Eccentricity (EC) and
+  // current Mean Anomaly (M), angle from periapsis if orbit was a circle
+  const n = 2 * Math.PI / bodyData.PR; // Mean motion (rad/sec)
+  const M = bodyData.MA + n * elapsedTime; // Mean Anomaly
+  const EC = bodyData.EC; // Eccentricity
+  const E = solveKepler(M, EC); // Eccentric anomaly
 
-  // Calculate the current True Anomaly (TA or ν), the real angle from perigee
+  // Calculate the True Anomaly (TA or ν), and the angle from
+  // perige (viewed from the nearest focus)
   const [sinE, cosE] = [Math.sin(E), Math.cos(E)];
-  const sinTA = Math.sqrt(1 - EC*EC) * sinE / (1 - EC * cosE);
   const cosTA = (cosE - EC) / (1 - EC * cosE);
+  const sinTA = Math.sqrt(1 - EC * EC) * sinE / (1 - EC * cosE);
   const TA = Math.atan2(sinTA, cosTA);
 
-  // Calculate distance from Earth (focus)
-  const r = MOON_DATA.SemiMajorAxis * (1 - EC * EC) / (1 + EC * Math.cos(TA));
+  // Calculate distance from focus
+  const r = bodyData.A * (1 - EC * EC) / (1 + EC * Math.cos(TA));
 
-  // Calculate position in the orbital plane
+  return [TA, r];
+}
+
+// Calculate the Moon's position vector in Geocentric Moon Orbital frame
+function getMoonPosition(elapsedTime) {
+
+  // Get True Anomaly and Moon-Earth distance in geocentric reference (from focus POV)
+  const [TA, r] = solveOrbit(elapsedTime, MOON_DATA);
+
+  // Calculate position in the Moon's tilted orbital plane
   const angleFromAscendingNode = TA + MOON_DATA.W; // x-axis is at ascending node
-  const x = r * Math.cos(angleFromAscendingNode);
-  const z = r * Math.sin(angleFromAscendingNode);
-  return [x, 0, z]; // Return 3D coordinates (Y=0 in orbital plane)
+  const x_moon =  r * Math.cos(angleFromAscendingNode);
+  const z_moon = -r * Math.sin(angleFromAscendingNode); // -z due to local frame
+
+  // The position is set in the local frame of the 'moonOrbit' object, whose
+  // XZ plane represents the 2D tilted orbital plane.
+  return [x_moon, 0, z_moon];
+}
+
+// Calculate the Sun's position vector in Geocentric World frame
+function getSunPosition(elapsedTime) {
+
+  // Get True Anomaly and Sun-Earth distance in heliocentric J2000 reference
+  const [TA, r] = solveOrbit(elapsedTime, EARTH_DATA);
+
+  // True Longitude is the angle of Earth measured counter-clockwise in the
+  // Ecliptic plane, starting from the Vernal Equinox at J2000 Epoch
+  const LP = EARTH_DATA.OM + EARTH_DATA.W;
+  const trueLongitude = TA + LP;
+  const x_earth = r * Math.cos(trueLongitude);
+  const y_earth = r * Math.sin(trueLongitude);
+
+  // The Sun's position (-x,-y) from the Earth is the negate of the
+  // Earth's position (x, y) from the Sun, but +X axis in Heliocentric
+  // J2000 is -X in Geocentric World:
+  //      J2000 (x_earth, y_earth, 0) -> World (x_earth, 0, -y_earth)
+  return [-x_earth, 0, y_earth]; // FIXME it should be [x_earth, 0, -y_earth]
 }
 
 function isAboveHorizon(target, radius) {
@@ -510,40 +700,44 @@ function isAboveHorizon(target, radius) {
 // ============================================================================
 
 // Calculate simulation constants and state
-const earthRotationSpeed = 2 * Math.PI / EARTH_ROTATION_PERIOD;
+const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
+const moonSiderealRotationSpeed = 2 * Math.PI / MOON_DATA.PR;
 const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
-const moonSiderealRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
-const sunOrbitSpeed = 2 * Math.PI / EARTH_ORBITAL_PERIOD;
-const sunInitialAngle = (DAYS_SINCE_SOLSTICE / 365.25) * 2 * Math.PI;
-// Prime meridian is at midnight at solstice 00:00
-const earthInitialAngle = sunInitialAngle + Math.PI;
 
 // Clock works also when tab is hidden, can be set/reset by UI, time
 // can run faster and/or backward from real time and is adjustable
 const SimClock = class {
-  constructor() {
-    this.running = true;
-    this.referenceTime = REFERENCE_DATE.getTime(); // fixed t=0 point
+  constructor(masterEpoch) {
+    this.masterEpochTime = masterEpoch.getTime(); // our t=0
     this.reset();
+    this.running = true;
   }
   reset() {
-    this.simulationTime = this.referenceTime;
-    this.realTimeAtResume = Date.now();
+    this.simulationTimeAtPause = Date.now();
+    this.realTimeAtResume = this.simulationTimeAtPause;
     this.speedX = SIM_TIME_SPEED_UP;
+  }
+  setDate(newDate) {
+    // Adjust the "banked" time to make the total time equal the newDate
+    this.simulationTimeAtPause = newDate.getTime() - this._deltaSinceLastResume();
   }
   _deltaSinceLastResume() {
     // Accumulate time only while running. It is simulation time, not real time
     return this.running ? this.speedX * (Date.now() - this.realTimeAtResume) : 0;
   }
-  elapsedTime() {
-    const simTime = this.simulationTime + this._deltaSinceLastResume();
-    return (simTime - this.referenceTime) / 1000; // in secs
+  getTime() {
+    const simTime = this.simulationTimeAtPause + this._deltaSinceLastResume();
+    return simTime; // in msecs
+  }
+  elapsed() {
+    // Initial offsets in simulation are computed on master epoch
+    return this.getTime() - this.masterEpochTime;
   }
   togglePause() {
     if (this.running) {
       // Before stopping, add the "ticking" time to the "banked" time
-      this.simulationTime += this._deltaSinceLastResume();
+      this.simulationTimeAtPause += this._deltaSinceLastResume();
     } else {
       this.realTimeAtResume = Date.now();
     }
@@ -551,60 +745,69 @@ const SimClock = class {
     return this.running;
   }
   speed() {
-    return this.speedX / SIM_TIME_SPEED_UP; // SIM_TIME_SPEED_UP -> 1
+    return this.speedX / SIM_TIME_SPEED_UP; // SIM_TIME_SPEED_UP -> speed == 1
   }
   setSpeed(speed) {
-    // Banks any accumulated time at the old speed by simulating a
-    // stop/start, then sets the new speed. It works whether the
+    // Bank any accumulated time at the old speed by simulating a
+    // stop/start, then set the new speed. It works whether the
     // clock is running or paused.
     this.togglePause();
     this.togglePause();
-    this.speedX = SIM_TIME_SPEED_UP * speed; // 1 -> SIM_TIME_SPEED_UP
-  }
-  setDate(newDate) {
-    // Adjust the "banked" time to make the total time equal the newDate
-    this.simulationTime = newDate.getTime() - this._deltaSinceLastResume();
+    this.speedX = SIM_TIME_SPEED_UP * speed;
   }
 };
-const simClock = new SimClock();
+const simClock = new SimClock(MASTER_EPOCH);
 
 const transientEvents = { atRise: false, atSet: false, azEl: [], latLon: [] };
+
+// Rescaled Sun distance for placing directional Sun light source
+const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
+
+const sunPositionVec = new THREE.Vector3();
 
 // Animation loop function
 function animate() {
 
-  const elapsedTime = simClock.elapsedTime(); // in seconds
+  const elpasedMsec = simClock.elapsed(); // in msecs
+  const elapsed = elpasedMsec / 1000; // in secs
+
+  // Orbit Sun around Earth, we use a rescaled distance for rendering purposes
+  const [xs, ys, zs] = getSunPosition(elapsed);
+  sunPositionVec.set(xs, ys, zs).normalize().multiplyScalar(SUN_LIGHT_DISTANCE);
+  sunLight.position.copy(sunPositionVec);
 
   // Rotate Earth
-  earth.rotation.y = earthInitialAngle  + elapsedTime * earthRotationSpeed;
+  earth.rotation.y = InitialEarthY + earthRotationSpeed * elapsed;
 
-  // Earth axial precession (at t = 0 inclination is aligned toward Sun at solstice)
-  tiltedEarth.rotation.y = precessionSpeed * elapsedTime;
+  // Earth axial precession
+  // First tilt around x, then rotate y. Three.js rotation order is 'XYZ'
+  tiltedEarth.rotation.x = InitialTiltedEarthX;
+  tiltedEarth.rotation.y = -precessionSpeed * elapsed; // clockwise (negative)
 
-  // Moon rotation around its axis, in tidal locking with Earth
-  // Offset 180-degree because texture is centered on 0° longitude (facing earth)
-  moon.rotation.y = Math.PI + moonSiderealRotationSpeed * elapsedTime;
+  // Moon rotation around its Pole axis, in tidal locking with Earth
+  moon.rotation.y = InitialMoonY + moonSiderealRotationSpeed * elapsed;
 
-  // Moon orbit around Earth
-  const [x, y, z] = getMoonPosition(elapsedTime);
-  tiltedMoon.position.set(x, y, z);
+  // Moon's axis precession??? FIXME
+  tiltedMoon.rotation.x = InitialTiltedMoonX;
 
-  // The Moon's orbital plane precesses backwards (retrograde).
+  // Moon orbit around Earth (relative to the orbital plane)
+  const [xm, ym, zm] = getMoonPosition(elapsed);
+  tiltedMoon.position.set(xm, ym, zm); // FIXME is clockwise
+
+  // Moon's orbit plane. Precession here??? FIXME
+  moonOrbit.rotation.x = InitialMoonOrbitX;
+
+  // The Moon's ascending node precesses backwards (retrograde).
   // This is a rotation around the Ecliptic Pole (the Y-axis).
-  ascendingNodePivot.rotation.y = MOON_DATA.OM - moonNodeSpeed * elapsedTime;
-
-  // The sun's orbital motion is counter-clockwise when viewed from above (positive Y)
-  // In Three.js coordinate system (+X right, +Y up, +Z toward camera).
-  // So a counter-clockwise rotation requires the sun to move from positive +X toward
-  // negative -Z and angle will decrease with time.
-  const sunAngle = -(sunInitialAngle + elapsedTime * sunOrbitSpeed);
-  sunLight.position.set(sunDistance * Math.cos(sunAngle), 0, sunDistance * Math.sin(sunAngle));
+  ascendingNodePivot.rotation.y = InitialAscendingNodePivotY - moonNodeSpeed * elapsed;
 
   if (observerState.object) {
-    // Pause animation at Moon raise/set
+    // Pause animation at Moon raise/set. Handle simulation in reverse time
     const isMoonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
-    const atRaise =  isMoonVisible && !observerState.moonVisible;
-    const atSet   = !isMoonVisible &&  observerState.moonVisible;
+    const timeForward = (simClock.speed() > 0);
+    const visibilityChanged = (isMoonVisible != observerState.moonVisible);
+    const atRaise = visibilityChanged && (isMoonVisible === timeForward);
+    const atSet   = visibilityChanged && !atRaise;
     observerState.moonVisible = isMoonVisible;
 
     // If we are in observer view pass elevation and azimuth
@@ -627,6 +830,7 @@ function animate() {
 class Simulation {
   constructor() {
     this.update = animate;
+    this.getTime = simClock.getTime.bind(simClock);
     this.setDate = simClock.setDate.bind(simClock);
     this.speed = simClock.speed.bind(simClock);
     this.setSpeed = simClock.setSpeed.bind(simClock);
@@ -641,11 +845,6 @@ class Simulation {
   }
   getRenderer() {
     return renderer;
-  }
-  getDate() {
-    const elapsedMsec = simClock.elapsedTime() * 1000;
-    const date = new Date(REFERENCE_DATE.getTime() + elapsedMsec);
-    return [date, elapsedMsec];
   }
   reverseSpeed() {
     const speed = -simClock.speed();
