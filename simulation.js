@@ -75,6 +75,7 @@ const SKY_TEXTURE_URL = [  // In celestial coordinates from https://svs.gsfc.nas
 // Physical properties (in kilometers, converted to scene units)
 const EARTH_RADIUS_KM = 6371; // Conventional radius for sphere approx.
 const MOON_RADIUS_KM = 1737.53;
+const SUN_RADIUS_KM = 695700;
 const MOON_DISTANCE_KM = 384400;    // average
 const EARTH_AXIAL_TILT = 23.439291; // degrees
 const MOON_AXIAL_TILT = 6.68;       // degrees
@@ -90,6 +91,7 @@ const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
 
 // Master Epoch of JPL data sources
 const MASTER_EPOCH = new Date('2025-09-10T09:34:03Z');
+const J2000_EPOCH = new Date('2000-01-01T12:00:00Z');
 
 const HOUR = 3600; // In SI seconds
 const SOLAR_DAY = 24 * HOUR; // Mean Solar Day
@@ -167,6 +169,12 @@ const EARTH_DATA = {
 
     L_Ap_Sid_Time: HMSToRadians("08 52 45.4526"), // Greenwich Apparent Sidereal Time (GAST)
 };
+
+// Calculate simulation constants and state
+const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
+const moonSiderealRotationSpeed = 2 * Math.PI / MOON_DATA.PR;
+const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
+const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
 
 // ============================================================================
 // SCENE SETUP
@@ -280,6 +288,11 @@ const InitialEarthY = EARTH_DATA.L_Ap_Sid_Time;
 // is clockwise (negative).
 const InitialTiltedEarthX = -toRadians(EARTH_AXIAL_TILT);
 
+// Calculate the initial precesssion, the rotation of Y-axis occurred since J2000 Epoch
+// The rotation is retrograde (clockwise), hence the negative sign.
+const timeSinceJ2000 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
+const InitialPrecessionY = -precessionSpeed * timeSinceJ2000;
+
 // Moon rotation
 //
 // Moon is in tidal locking, meaning it rotates on its axis at the same rate it orbits
@@ -353,7 +366,8 @@ const observerState = {
     object: null,
     marker:null, // in local coordinates
     observerOnEarth: false,
-    moonVisible: false,
+    moonVisible: null,
+    sunVisible: null,
     viewIndex: null,
     tempVec: new THREE.Vector3(),
 };
@@ -473,6 +487,7 @@ function enterObserverMode(object, surfacePoint) {
   // Init observer events
   observerState.observerOnEarth = (object === earth);
   observerState.moonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
+  observerState.sunVisible = isAboveHorizon(sunLight, 0); // FIXME can have one fake event if sun at set/rise
 
   // Create a new observer view placed on marker
   const eyeHeight = toUnits(5); // km above surface
@@ -483,6 +498,10 @@ function enterObserverMode(object, surfacePoint) {
   // Lock the view camera on the marker
   const view = views.get(viewIndex);
   view.lockTo(marker, true);
+
+  // DEBUG CODE
+  //addAxesHelper(marker, 10);
+  //addAxesHelper(view.camera, 5);
 
   return viewIndex;
 }
@@ -585,6 +604,60 @@ function getMarker(color, position) {
 // Nodes lay on x-axis in local coordinates
 moonOrbit.add(getMarker(0xff00ff, [+rAsc, 0, 0])); // Magenta
 moonOrbit.add(getMarker(0xffff00, [-rDes, 0, 0])); // Yellow
+
+// ===== START: DEBUG CODE =====
+
+function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
+  const points = [];
+
+  // Loop from North Pole to South Pole
+  for (let i = 0; i <= segments; i++) {
+    // Interpolate the latitude from +90 degrees to -90 degrees
+    const latRad = Math.PI / 2 - (i / segments) * Math.PI;
+
+    // Calculate the 3D position using spherical coordinates (with Y as up)
+    const x = radius * Math.cos(latRad) * Math.cos(longitudeRad);
+    const y = radius * Math.sin(latRad);
+    const z = radius * Math.cos(latRad) * Math.sin(longitudeRad);
+
+    points.push(new THREE.Vector3(x, y, z));
+  }
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({ color: color, fog: false }); // fog:false keeps it visible from far away
+  const line = new THREE.Line(geometry, material);
+
+  return line;
+}
+
+// Create a red material for the line
+const sunLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+
+// Define the start and end points for the line.
+// The start is Earth's center (0,0,0). The end is a placeholder.
+const sunLinePoints = [];
+sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // Start point
+sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // End point (will be updated)
+
+const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
+
+// Create the line object
+const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
+scene.add(sunLine);
+
+// Create a bright yellow line to represent the Prime Meridian (0° longitude).
+// We make the radius slightly larger than the Earth's to prevent Z-fighting
+// (where the line flickers because it's at the same depth as the texture).
+const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
+
+// Add the line as a child of the Earth mesh. This ensures it inherits
+// all of the Earth's rotations (both daily spin and axial tilt).
+earth.add(primeMeridianLine);
+
+addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
+
+// ===== END: DEBUG CODE =====
+
 
 // ============================================================================
 // CELESTIAL BODY RUNTIME COMPUTATIONS
@@ -695,15 +768,44 @@ function isAboveHorizon(target, radius) {
   return targetLocalPos.y > visibilityThreshold;
 }
 
+// Event types
+export const CELESTIAL_EVENTS = {
+    RISE: 'rise',
+    SET: 'set',
+};
+
+class CelestialEventManager {
+  constructor() {
+    this.listeners = new Map();
+  }
+  on(eventType, callback) {
+    if (!this.listeners.has(eventType)) {
+        this.listeners.set(eventType, []);
+    }
+    this.listeners.get(eventType).push(callback);
+  }
+  emit(eventType, data) {
+    const listeners = this.listeners.get(eventType) || [];
+    listeners.forEach(callback => callback(data));
+  }
+  checkVisibility(object, name, radius, timeForward, prevState) {
+    const isVisible = isAboveHorizon(object, radius);
+    if (isVisible !== prevState) {
+        const atRise = (isVisible === timeForward);
+        if (atRise) {
+            this.emit(CELESTIAL_EVENTS.RISE, name);
+        } else {
+            this.emit(CELESTIAL_EVENTS.SET, name);
+        }
+        prevState = isVisible;
+    }
+    return isVisible;
+  }
+};
+
 // ============================================================================
 // ANIMATION LOOP
 // ============================================================================
-
-// Calculate simulation constants and state
-const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
-const moonSiderealRotationSpeed = 2 * Math.PI / MOON_DATA.PR;
-const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
-const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
 
 // Clock works also when tab is hidden, can be set/reset by UI, time
 // can run faster and/or backward from real time and is adjustable
@@ -756,9 +858,8 @@ const SimClock = class {
     this.speedX = SIM_TIME_SPEED_UP * speed;
   }
 };
-const simClock = new SimClock(MASTER_EPOCH);
 
-const transientEvents = { atRise: false, atSet: false, azEl: [], latLon: [] };
+const geoObserverData = { azEl: [], latLon: [] };
 
 // Rescaled Sun distance for placing directional Sun light source
 const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
@@ -766,23 +867,24 @@ const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
 const sunPositionVec = new THREE.Vector3();
 
 // Animation loop function
-function animate() {
+function animate(simulation) {
 
-  const elpasedMsec = simClock.elapsed(); // in msecs
+  const elpasedMsec = simulation.clock.elapsed(); // in msecs
   const elapsed = elpasedMsec / 1000; // in secs
 
   // Orbit Sun around Earth, we use a rescaled distance for rendering purposes
   const [xs, ys, zs] = getSunPosition(elapsed);
-  sunPositionVec.set(xs, ys, zs).normalize().multiplyScalar(SUN_LIGHT_DISTANCE);
+  const sunDistance = sunPositionVec.set(xs, ys, zs).length();
+  sunPositionVec.normalize().multiplyScalar(SUN_LIGHT_DISTANCE);
   sunLight.position.copy(sunPositionVec);
 
   // Rotate Earth
   earth.rotation.y = InitialEarthY + earthRotationSpeed * elapsed;
 
-  // Earth axial precession
+  // Earth axial precession in clockwise (negative) direction
   // First tilt around x, then rotate y. Three.js rotation order is 'XYZ'
   tiltedEarth.rotation.x = InitialTiltedEarthX;
-  tiltedEarth.rotation.y = -precessionSpeed * elapsed; // clockwise (negative)
+  tiltedEarth.rotation.y = InitialPrecessionY - precessionSpeed * elapsed;
 
   // Moon rotation around its Pole axis, in tidal locking with Earth
   moon.rotation.y = InitialMoonY + moonSiderealRotationSpeed * elapsed;
@@ -801,26 +903,44 @@ function animate() {
   // This is a rotation around the Ecliptic Pole (the Y-axis).
   ascendingNodePivot.rotation.y = InitialAscendingNodePivotY - moonNodeSpeed * elapsed;
 
+  // ===== START: DEBUG CODE =====
+
+  // Update the end point of the line to match the sun's new position
+  const sunPosition = sunPositionVec.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
+  const positions = sunLine.geometry.attributes.position.array;
+  positions[3] = sunPosition.x; // Update x of the second vertex
+  positions[4] = sunPosition.y; // Update y of the second vertex
+  positions[5] = sunPosition.z; // Update z of the second vertex
+
+  // Tell Three.js that the position attribute needs to be updated on the GPU
+  sunLine.geometry.attributes.position.needsUpdate = true;
+
+  // ===== END: DEBUG CODE =====
+
   if (observerState.object) {
-    // Pause animation at Moon raise/set. Handle simulation in reverse time
-    const isMoonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
-    const timeForward = (simClock.speed() > 0);
-    const visibilityChanged = (isMoonVisible != observerState.moonVisible);
-    const atRaise = visibilityChanged && (isMoonVisible === timeForward);
-    const atSet   = visibilityChanged && !atRaise;
-    observerState.moonVisible = isMoonVisible;
+    // Calculate the equivalent radius using the captured real distance
+    const equivalentSunRadius = toUnits(SUN_RADIUS_KM) * (SUN_LIGHT_DISTANCE / sunDistance);
+
+    // Check and emit celestial events
+    const timeForward = (simulation.clock.speed() > 0);
+    observerState.moonVisible = simulation.eventManager.checkVisibility(
+        tiltedMoon, "Moon", toUnits(MOON_RADIUS_KM), timeForward, observerState.moonVisible
+    );
+    observerState.sunVisible = simulation.eventManager.checkVisibility(
+        sunLight, "Sun", equivalentSunRadius, timeForward, observerState.sunVisible
+    );
 
     // If we are in observer view pass elevation and azimuth
     const view = views.get(observerState.viewIndex);
     const isAct = (view == views.getActive());
     const { azEl, latLon } = isAct ? view.getGeoData(observerState.marker) : { azEl: [], latLon: []};
-    Object.assign(transientEvents, { atRise: atRaise, atSet: atSet, azEl: azEl, latLon: latLon });
+    Object.assign(geoObserverData, { azEl: azEl, latLon: latLon });
   }
 
   // Update the active controls and render with the active camera
   const activeCamera = views.update();
   renderer.render(scene, activeCamera);
-  return transientEvents;
+  return geoObserverData;
 }
 
 // ============================================================================
@@ -829,12 +949,19 @@ function animate() {
 
 class Simulation {
   constructor() {
-    this.update = animate;
-    this.getTime = simClock.getTime.bind(simClock);
-    this.setDate = simClock.setDate.bind(simClock);
-    this.speed = simClock.speed.bind(simClock);
-    this.setSpeed = simClock.setSpeed.bind(simClock);
-    this.togglePause = simClock.togglePause.bind(simClock);
+    // Our simulation clock
+    this.clock = new SimClock(MASTER_EPOCH);
+
+    // Create a new event manager and expose its 'on' method
+    this.eventManager = new CelestialEventManager();
+    this.on = this.eventManager.on.bind(this.eventManager);
+
+    this.update = () => animate(this);
+    this.getTime = this.clock.getTime.bind(this.clock);
+    this.setDate = this.clock.setDate.bind(this.clock);
+    this.speed = this.clock.speed.bind(this.clock);
+    this.setSpeed = this.clock.setSpeed.bind(this.clock);
+    this.togglePause = this.clock.togglePause.bind(this.clock);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
@@ -847,12 +974,12 @@ class Simulation {
     return renderer;
   }
   reverseSpeed() {
-    const speed = -simClock.speed();
-    simClock.setSpeed(speed);
+    const speed = -this.clock.speed();
+    this.clock.setSpeed(speed);
     return speed;
   }
   reset() {
-    simClock.reset();
+    this.clock.reset();
     views.setDefault();
   }
   isObserverView() {
