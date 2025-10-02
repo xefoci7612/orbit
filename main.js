@@ -4,7 +4,8 @@
 
 'use strict';
 
-import Simulation from './simulation.js';
+import Simulation, { CELESTIAL_EVENTS } from './simulation.js';
+import { Validate, runValidation } from './validate.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 11 + 5); // HH:mm
@@ -58,7 +59,7 @@ function fromDMS(valueString) {
   return (Math.abs(totalSeconds) / 3600) * sign; // secs to degrees
 }
 
-const simulation = new Simulation();
+const simulation = new Simulation(Validate);
 const renderer = simulation.getRenderer();
 
 // View indices from ViewManager
@@ -318,14 +319,20 @@ addEventListener('resize', () => {
   simulation.resize();
 });
 
+simulation.on(CELESTIAL_EVENTS.RISE, (name) => {
+  console.log(`${name}rise detected!`);
+  elem.btnPlay.onclick();
+});
+
+simulation.on(CELESTIAL_EVENTS.SET, (name) => {
+  console.log(`${name}set detected!`);
+  elem.btnPlay.onclick();
+});
+
 function animationLoop() {
 
   // Perform a simulation step and render
   const events = simulation.update();
-
-  // Events detected during simulation step
-  if (events.atRise || events.atSet)
-      elem.btnPlay.onclick();
 
   // If we are in observer view show/set coordinates
   if (events.azEl.length > 0) {
@@ -357,6 +364,12 @@ window.addEventListener('load', () => {
   elem.loaderOverlay.addEventListener('transitionend', () => {
     elem.loaderOverlay.remove();
   });
+
+  // If in validation mode run sampling code and exit
+  if (Validate) {
+    runValidation(simulation);
+    return;
+  }
 
   // Start animation loop after all is loaded
   animationLoop();
