@@ -62,7 +62,7 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { init_debug, set_sunline_length } from './validate.js';
 
-export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
+export const DEBUG = true; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Run validation script instead of normal visualization mode
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
@@ -84,9 +84,10 @@ const MOON_DISTANCE_KM = 384400;    // average
 const EARTH_AXIAL_TILT = 23.439291; // degrees
 const MOON_AXIAL_TILT = 6.68;       // degrees
 
-// Earth-Moon Barycenter (EBM) Correction Constants
-const EARTH_MOON_MASS_RATIO = 81.3;
-const BARYCENTER_SCALE_FACTOR = 1 / (1 + EARTH_MOON_MASS_RATIO);
+// Earth-Moon Barycenter (EBM) Correction Constants to convert
+// the EMB->Moon distance to the EMB->Earth distance
+//  m₁ × d₁ = m₂ × d₂  --> EBM_E = EBM_M * MOON_EARTH_MASS_RATIO
+const MOON_EARTH_MASS_RATIO = 1 / 81.3;
 
 // Scale conversions
 const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
@@ -116,7 +117,7 @@ const MOON_NODE_PRECESSION_PERIOD = 18.612815932 * JULIAN_YEAR;
 const HORIZON_REFRACTION = toRadians(34.5 / 60);
 
 /*
-    Moon and Earth Ephemeris from JPL Horizons
+    Moon and Earth Ephemeris (osculating elements) from JPL Horizons
 
     https://ssd.jpl.nasa.gov/horizons/app.html
 
@@ -157,24 +158,37 @@ const HORIZON_REFRACTION = toRadians(34.5 / 60);
       frame's +X axis relative to the Vernal Equinox.
 */
 
-const MOON_DATA = {
-     A: toUnits(3.848214581097544E+05),   // km (Semi-major Axis)
-    EC: 5.212487669881421E-02,            // eccentricity
-    IN: toRadians(5.280240463394533E+00), // inclination relative to ecliptic
-    OM: toRadians(3.479713278613414E+02), // longitude of the Ascending Node
-     W: toRadians(3.757619864565795E+01), // argument of periapsis (perigee)
-    MA: toRadians(7.092828128683312E+00), // mean anomaly
-    PR: 2.348608891413124E+06,            // orbital period in seconds
+// Target Body: Earth-Moon Barycenter [EMB], Coordinate Center:  Sun (body center) [500@10]
+const EMB_DATA = {
+     A: toUnits(1.495966654879858E+08),
+    EC: 1.665513342185162E-02,
+    IN: toRadians(3.420270671329570E-03),
+    OM: toRadians(1.748420625245392E+02),
+     W: toRadians(2.882246162588136E+02),
+    MA: toRadians(2.472367196453327E+02),
+    PR: 3.155774884048544E+07,
 };
 
+// Target Body: Moon [Luna], Coordinate Center: Earth-Moon Barycenter [500@3]
+const MOON_DATA = {
+     A: toUnits(3.796241532734630E+05),
+    EC: 5.078618152688460E-02,
+    IN: toRadians(5.280291370607761E+00),
+    OM: toRadians(3.479716750341908E+02),
+     W: toRadians(3.711163694612181E+01),
+    MA: toRadians(1.290172290680006E+01),
+    PR: 2.343381844716793E+06,
+};
+
+// Target Body: Earth, Coordinate Center: Earth-Moon Barycenter [500@3]
 const EARTH_DATA = {
-     A: toUnits(1.494830834194617E+08),
-    EC: 1.676617060159998E-02,
-    IN: toRadians(5.309273646886771E-03),
-    OM: toRadians(1.712802847305776E+02),
-     W: toRadians(2.944120698115610E+02),
-    MA: toRadians(2.435990102008265E+02),
-    PR: 3.152183743256430E+07,
+     A: toUnits(4.669391144219639E+03),
+    EC: 5.078618152693617E-02,
+    IN: toRadians(5.280291370607768E+00),
+    OM: toRadians(3.479716750341909E+02),
+     W: toRadians(2.171116369461202E+02),
+    MA: toRadians(1.290172290678550E+01),
+    PR: 2.343381844717038E+06,
 
     L_Ap_Sid_Time: HMSToRadians("08 52 45.4526"), // Greenwich Apparent Sidereal Time (GAST)
 };
@@ -182,12 +196,26 @@ const EARTH_DATA = {
 // Calculate simulation constants and state
 const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
 const moonSiderealRotationSpeed = 2 * Math.PI / MOON_DATA.PR;
-const precessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
+const earthPrecessionSpeed = 2 * Math.PI / EARTH_PRECESSION_PERIOD;
 const moonNodeSpeed = 2 * Math.PI / MOON_NODE_PRECESSION_PERIOD;
 
 // ============================================================================
 // SCENE SETUP
 // ============================================================================
+
+/*
+  Setup a hierarchy of 3D Objects to apply rotations in an independent order
+  withouth the limitation of the fixed XYZ order by default Three.js
+*/
+
+// Helper to create a marker object
+function getMarker(color, position) {
+  const geometry = new THREE.SphereGeometry(toUnits(600));
+  const material = new THREE.MeshBasicMaterial({ color: color });
+  const marker = new THREE.Mesh(geometry, material);
+  marker.position.set(...position);
+  return marker;
+}
 
 // Create renderer and scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -203,9 +231,6 @@ scene.add(ambientLight);
 
 // Directional light to simulate sunlight
 const sunLight = new THREE.DirectionalLight(0xffffff, 1);
-sunLight.position.set(1, 0, 0); // just for setting target with lookAt() FIXME remove
-sunLight.lookAt(0, 0, 0);
-scene.add(sunLight);
 
 // Initial camera view that is also the default one
 const defaultCameraPos = (function() {
@@ -236,20 +261,28 @@ const tiltedEarth = new THREE.Object3D();
 tiltedEarth.add(earth);
 
 // Add Earth hierarchy to the scene
+// Origin of our Geocentric frame, we never change tiltedEarth position
 scene.add(tiltedEarth);
+
+// EMB (Earth-Moon Barycenter) is the focus of both Moon and Sun orbits
+// EMB is a kind of "false" origin for our celestial body mechanics
+// EMB will be dynamically set at a computed offset from real Origin
+const embPivot = new THREE.Object3D();
+scene.add(embPivot);
 
 // Sun hierarchy
 //
-// Represent the 2D plane of Earth's orbit
-const earthOrbitalPlane = new THREE.Object3D();
-earthOrbitalPlane.add(sunLight);
+// Represent the 2D plane of Sun - Earth EMB orbit
+// EMB is at the focus, Sun is orbiting
+const sunOrbitalPlane = new THREE.Object3D();
+sunOrbitalPlane.add(sunLight);
 
 // Orient the entire Earth orbital system in 3D space around the World Y-axis
-const earthOrbitalFrame = new THREE.Object3D();
-earthOrbitalFrame.add(earthOrbitalPlane);
+const sunOrbitalFrame = new THREE.Object3D();
+sunOrbitalFrame.add(sunOrbitalPlane);
 
-// Add Sun hierarchy to the scene
-scene.add(earthOrbitalFrame);
+// Add Sun hierarchy to the EMB pivot point
+embPivot.add(sunOrbitalFrame);
 
 
 // Moon hierarchy
@@ -271,7 +304,7 @@ const moonOrbitalPlane = new THREE.Object3D();
 moonOrbitalPlane.add(tiltedMoon);
 
 // Create an elliptical curve for the Moon's orbit in its orbital plane
-const [points, rAsc, rDes] = ellipticCurve(MOON_DATA.A, MOON_DATA.EC, MOON_DATA.W);
+const [points, rMoonAsc, rMoonDes] = ellipticCurve(MOON_DATA.A, MOON_DATA.EC, MOON_DATA.W);
 const vertexBuffer = new THREE.BufferAttribute(points, 3);
 const orbitGeometry = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -282,12 +315,16 @@ const orbitMaterial = new THREE.LineBasicMaterial({
 const orbitPath = new THREE.LineLoop(orbitGeometry, orbitMaterial);
 moonOrbitalPlane.add(orbitPath);
 
+// Add markers on the Moon's orbit ascending and descending nodes
+moonOrbitalPlane.add(getMarker(0xff00ff, [+rMoonAsc, 0, 0])); // Magenta
+moonOrbitalPlane.add(getMarker(0xffff00, [-rMoonDes, 0, 0])); // Yellow
+
 // Add parent to follow the Moon's orbit nodal precession (swivel)
 const moonOrbitalFrame = new THREE.Object3D();
 moonOrbitalFrame.add(moonOrbitalPlane);
 
-// Add Moon hierarchy to the scene
-scene.add(moonOrbitalFrame);
+// Add Moon hierarchy to the EMB pivot point
+embPivot.add(moonOrbitalFrame);
 
 // Add additional elements if debug is enabled
 if (DEBUG)
@@ -318,7 +355,7 @@ const InitialTiltedEarthX = -toRadians(EARTH_AXIAL_TILT);
 // Calculate the initial precesssion, the rotation of Y-axis occurred since J2000 Epoch
 // The rotation is retrograde (clockwise), hence the negative sign.
 const timeSinceJ2000 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
-const InitialPrecessionY = -precessionSpeed * timeSinceJ2000;
+const InitialPrecessionY = -earthPrecessionSpeed * timeSinceJ2000;
 
 // Earth's Orbit Inclination to Ecliptic
 //
@@ -328,7 +365,7 @@ const InitialPrecessionY = -precessionSpeed * timeSinceJ2000;
 // Earth's orbit is prograde (counter-clockwise). A positive rotation around the
 // local +X axis correctly lifts the subsequent part of the orbit into the positive
 // ("North") Y direction, achieving the "ascending" motion.
-const InitialEarthOrbitX = EARTH_DATA.IN;
+const InitialEarthOrbitX = EMB_DATA.IN;
 
 // Earth's Orbital Plane Orientation (Longitude of the Ascending Node)
 //
@@ -344,7 +381,7 @@ const InitialEarthOrbitX = EARTH_DATA.IN;
 // axis (the Ecliptic North Pole) by the value of OM. The precession of this
 // angle is extremely slow (apsidal precession, ~112,000 years) and is
 // treated as static in this simulation.
-const InitialEarthOrbitY = EARTH_DATA.OM;
+const InitialEarthOrbitY = EMB_DATA.OM;
 
 
 // Moon rotation
@@ -593,65 +630,40 @@ function exitObserverMode() {
 }
 
 // ============================================================================
-// CELESTIAL BODY CREATION
+// CELESTIAL MECHANICS
 // ============================================================================
 
-/*
-  Setup a hierarchy of 3D Objects to apply rotations in an independent order
-  withouth the limitation of the fixed XYZ order by default Three.js
-*/
-
 // Computes an array of 3D vertex on an elliptic curve in the Moon's orbital plane.
-// The Earth is at the origin (0,0,0). The function's output coordinate system is
-// designed to match the local frame of the `moonOrbit` node it will be attached to.
+// The local coordinate convention for the orbital planes is:
 //
-// - The local +X axis represents the "line of nodes," pointing to the Ascending Node.
-// - The local XZ plane represents the Moon's orbital plane.
-// - In the `moonOrbit`'s right-handed local frame (where +X=Ascending Node and
-//   +Y=North Ecliptic Pole), prograde (counter-clockwise) motion from the
-//   Ascending Node proceeds into the NEGATIVE Z direction.
-//
-// To model this physical reality, the z-coordinate is calculated as -r * sin(angle).
+// - Nearest focus is at the origin (0,0,0)
+// - +X axis represents the "line of nodes," pointing to the Ascending Node.
+// - XZ plane represents the orbital plane.
+// - +Y axis is the UP direction, orbit at the ascending node moves from -Y to +Y
+// - +Z follows a right-handed local frame, at the ascending node the direction of
+//   a prograde (counter-clockwise) orbit will be OPPOSITE of +Z axis
 function ellipticCurve(A, EC, W) {
   const SEGMENTS = 360;
   const points = new Float32Array(SEGMENTS * 3);
 
-  // Distance from Earth given true anomaly ta (ellipse polar equation)
-  const distance = ta => A * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+  // Distance from focus given true anomaly (ellipse polar equation)
+  const radius = ta => A * (1 - EC * EC) / (1 + EC * Math.cos(ta));
 
-  // Loop starts at perigee (W) when i = 0, and angle 0 (ta = -W)
-  // corresponds to the ascending node.
+  // Loop starts at perigee (W) and moves in counter-clockwise direction
   for (let i = 0; i < SEGMENTS; i++) {
     const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
-    const r = distance(ta); // distance from Earth at true anomaly
-    const angle = ta + W; // angle from ascending node
-    points[i*3 + 0] = r * Math.cos(angle); // x
-    points[i*3 + 1] = 0;                   // y  (on orbital plane)
-    points[i*3 + 2] = -r * Math.sin(angle); // -z due to parent local frame
+    const u = W + ta; // argument of latitude (angle from ascending node)
+    const r = radius(ta); // distance from focus at true anomaly
+    points[i*3 + 0] = r * Math.cos(u); // x
+    points[i*3 + 1] = 0;               // y  (on orbital plane)
+    points[i*3 + 2] =-r * Math.sin(u); // -z due to local frame conventions
   }
 
-  // Find ascending and descending nodes x-axis coordinates
-  const rAsc = distance(-W);
-  const rDes = distance(-W + Math.PI);
+  // Ascending and descending nodes x-axis coordinates
+  const rAsc = radius(-W);
+  const rDes = radius(-W + Math.PI);
   return [points, rAsc, rDes];
 }
-
-// Setup the node markers corresponding to ascending/descending nodes
-function getMarker(color, position) {
-  const geometry = new THREE.SphereGeometry(toUnits(600));
-  const material = new THREE.MeshBasicMaterial({ color: color });
-  const marker = new THREE.Mesh(geometry, material);
-  marker.position.set(...position);
-  return marker;
-}
-// Nodes lay on x-axis in local coordinates
-moonOrbitalPlane.add(getMarker(0xff00ff, [+rAsc, 0, 0])); // Magenta
-moonOrbitalPlane.add(getMarker(0xffff00, [-rDes, 0, 0])); // Yellow
-
-// ============================================================================
-// CELESTIAL BODY RUNTIME COMPUTATIONS
-// ============================================================================
-
 
 // Solves Kepler's Equation for Eccentric Anomaly (E) with
 // the Newton-Raphson iterative method
@@ -675,15 +687,16 @@ function solveKepler(M, e) {
   return E;
 }
 
-// Return orbital parameters from ellipse's focus PV
-function solveOrbit(elapsedTime, bodyData) {
+// Solve an elliptical orbit with given osculating elements (oe) at epoch time and
+// elapsed time since epoch according to local frame conventions of orbital planes.
+function solveOrbit(elapsedTime, oe) {
 
-  // Solve Kepler's equation to get Eccentric Anomaly (E), angle from
-  // ellipse center if orbit was a circle, out of Eccentricity (EC) and
-  // current Mean Anomaly (M), angle from periapsis if orbit was a circle
-  const n = 2 * Math.PI / bodyData.PR; // Mean motion (rad/sec)
-  const M = bodyData.MA + n * elapsedTime; // Mean Anomaly
-  const EC = bodyData.EC; // Eccentricity
+  // Solve Kepler's equation to get E (Eccentric Anomaly, the angle from
+  // ellipse center if orbit was a circle) given EC (Eccentricity) and
+  // M (Current Mean Anomaly, the angle from periapsis if orbit was a circle)
+  const n = 2 * Math.PI / oe.PR; // Mean motion (rad/sec)
+  const M = oe.MA + n * elapsedTime; // Mean Anomaly
+  const EC = oe.EC; // Eccentricity
   const E = solveKepler(M, EC); // Eccentric anomaly
 
   // Calculate the True Anomaly (TA or ν), and the angle from
@@ -693,44 +706,42 @@ function solveOrbit(elapsedTime, bodyData) {
   const sinTA = Math.sqrt(1 - EC * EC) * sinE / (1 - EC * cosE);
   const TA = Math.atan2(sinTA, cosTA);
 
-  // Calculate distance from focus
-  const r = bodyData.A * (1 - EC * EC) / (1 + EC * Math.cos(TA));
+  // Argument of Latitude (u) = Argument of Periapsis (ω) + True Anomaly (ν)
+  const u = oe.W + TA;
 
-  return [TA, r];
+  // Radius as distance from focus
+  const r = oe.A * (1 - EC * EC) / (1 + EC * Math.cos(TA));
+
+  // Position in the 2D orbital plane
+  const x =  r * Math.cos(u);
+  const z = -r * Math.sin(u); // -z for prograde motion
+  return [x, z];
 }
 
-// Calculate the Moon's position vector in Geocentric Moon Orbital frame
-function getMoonPosition(elapsedTime) {
+// Calculate the Moon's position relative to its nearest focus
+// set at Earth-Moon barycenter (EBM)
+function getMoonEBMPosition(elapsedTime) {
 
-  // Get True Anomaly and Moon-Earth distance in geocentric reference (from focus POV)
-  const [TA, r] = solveOrbit(elapsedTime, MOON_DATA);
+  // Position of Moon in the local frame of the 2D orbital XZ plane
+  const [x_moon, z_moon] = solveOrbit(elapsedTime, MOON_DATA);
 
-  // Calculate position in the Moon's tilted orbital plane
-  const angleFromAscendingNode = TA + MOON_DATA.W; // x-axis is at ascending node
-  const x_moon =  r * Math.cos(angleFromAscendingNode);
-  const z_moon = -r * Math.sin(angleFromAscendingNode); // -z due to local frame
-
-  // The position is set in the local frame of the 'moonOrbit' object, whose
-  // XZ plane represents the 2D tilted orbital plane.
+  // Convert to 3D with +Y axis perpendicular to orbital plane
   return [x_moon, 0, z_moon];
 }
 
-// Calculate the Sun's position vector in Geocentric World frame
-function getSunPosition(elapsedTime) {
+// Calculate the Sun's position relative to the Earth-Moon barycenter (EBM)
+// Differently from the Moon case, here the osculating elements refer to a
+// heliocentric coordinate system: the EBM orbits around the Sun.
+function getSunEBMPosition(elapsedTime) {
 
-  // Get True Anomaly and Sun-Earth distance in heliocentric J2000 reference
-  const [TA, r] = solveOrbit(elapsedTime, EARTH_DATA);
+  // Position of EBM in the heliocentric frame of solar orbital plane
+  const [x_ebm, z_ebm] = solveOrbit(elapsedTime, EMB_DATA);
 
-  // Calculate position in the Sun's tilted orbital plane
-  const angleFromAscendingNode = TA + EARTH_DATA.W; // x-axis is at ascending node
-  const x_earth =  r * Math.cos(angleFromAscendingNode);
-  const z_earth = -r * Math.sin(angleFromAscendingNode); // -z for prograde motion
-
-  // The Sun's position (-x,-y) from the Earth is the negate of the
-  // Earth's position (x, y) from the Sun, but +X axis in Heliocentric
-  // J2000 is -X in Geocentric World:
-  //      J2000 (x_earth, y_earth, 0) -> World (x_earth, 0, -y_earth)
-  return [-x_earth, 0, -z_earth]; // FIXME it should be [x_earth, 0, z_earth]
+  // The Sun's position from EBM point of view is the negate of the
+  // EBM's position from the Sun point of view.
+  // Moreover the +X axis in Heliocentric J2000 is -X in Geocentric World:
+  //      J2000 (x, y, 0) -> World (x, 0, -y)
+  return [x_ebm, 0, -z_ebm];
 }
 
 function isAboveHorizon(target, radius) {
@@ -851,9 +862,11 @@ const simStepData = { azEl: [], latLon: [] };
 // Rescaled Sun distance for placing directional Sun light source
 const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
 
+const origin = new THREE.Vector3();
 const sunPosVec = new THREE.Vector3();
 const sunPosWorldVec = new THREE.Vector3();
 const moonPosWorldVec = new THREE.Vector3();
+const ebmPosWorldVec = new THREE.Vector3();
 const embCorrectionVec = new THREE.Vector3();
 
 // Animation loop function
@@ -862,9 +875,9 @@ function animate(simulation) {
   const elpasedMsec = simulation.clock.elapsed(); // in msecs
   const elapsed = elpasedMsec / 1000; // in secs
 
-  // Apply initial static rotations to the new Earth-Sun hierarchy
-  earthOrbitalPlane.rotation.x = InitialEarthOrbitX;
-  earthOrbitalFrame.rotation.y = InitialEarthOrbitY;
+  // Apply initial static rotations to the Sun orbital plane
+  sunOrbitalPlane.rotation.x = InitialEarthOrbitX;
+  sunOrbitalFrame.rotation.y = InitialEarthOrbitY;
 
   // Rotate Earth
   earth.rotation.y = InitialEarthY + earthRotationSpeed * elapsed;
@@ -872,7 +885,7 @@ function animate(simulation) {
   // Earth axial precession in clockwise (negative) direction
   // First tilt around x, then rotate y. Three.js rotation order is 'XYZ'
   tiltedEarth.rotation.x = InitialTiltedEarthX;
-  tiltedEarth.rotation.y = InitialPrecessionY - precessionSpeed * elapsed;
+  tiltedEarth.rotation.y = InitialPrecessionY - earthPrecessionSpeed * elapsed;
 
   // Moon rotation around its Pole axis, in tidal locking with Earth
   moon.rotation.y = InitialMoonY + moonSiderealRotationSpeed * elapsed;
@@ -880,8 +893,8 @@ function animate(simulation) {
   // Moon's axis precession??? FIXME
   tiltedMoon.rotation.x = InitialTiltedMoonX;
 
-  // Moon orbit around Earth (relative to the orbital plane)
-  const [xm, ym, zm] = getMoonPosition(elapsed);
+  // Moon orbit around EMB focus (relative to the orbital plane)
+  const [xm, ym, zm] = getMoonEBMPosition(elapsed);
   tiltedMoon.position.set(xm, ym, zm);
 
   // Moon's orbit plane. Precession here??? FIXME
@@ -891,21 +904,31 @@ function animate(simulation) {
   // This is a rotation around the Ecliptic Pole (the Y-axis).
   moonOrbitalFrame.rotation.y = InitialAscendingNodePivotY - moonNodeSpeed * elapsed;
 
-  // Orbit Sun around Earth
-  const [xs, ys, zs] = getSunPosition(elapsed);
-  sunLight.position.set(xs, ys, zs); // temporary to get hierarcy to compute for us
+  // Sun orbit around EBM in the Sun orbital plane
+  const [xs, ys, zs] = getSunEBMPosition(elapsed);
+  sunLight.position.set(xs, ys, zs);
 
-  // Calculate the correction vector (Earth's wobble) in World coords
-  sunLight.getWorldPosition(sunPosWorldVec);
+  // Calculate EBM->Moon vector in world coordinates and rescale
+  // according to barycenter rule: this will be the EBM
+  // position in the World Geocentric reference system
+  embPivot.getWorldPosition(ebmPosWorldVec);
   tiltedMoon.getWorldPosition(moonPosWorldVec);
-  embCorrectionVec.copy(moonPosWorldVec).multiplyScalar(BARYCENTER_SCALE_FACTOR);
-  sunPosWorldVec.sub(embCorrectionVec); // FIXME
+  embCorrectionVec.subVectors(moonPosWorldVec, ebmPosWorldVec)
+                  .multiplyScalar(MOON_EARTH_MASS_RATIO);
+
+  // Set EMB position, this will implicitly update all orbital frames
+  embPivot.position.copy(embCorrectionVec); // EMB is in World coords
+  scene.updateWorldMatrix(true, true); // Force hierarchy recalculation
+
+  // Hierarchy is now fully updated, recompute real positions
+  tiltedMoon.getWorldPosition(moonPosWorldVec);
+  sunLight.getWorldPosition(sunPosWorldVec);
 
   if (simulation.validateMode) {
-    const mu = moonPosWorldVec;
-    const su = sunPosWorldVec;
-    const moonV = [fromUnits(mu.x), fromUnits(mu.y), fromUnits(mu.z)];
-    const sunV  = [fromUnits(su.x), fromUnits(su.y), fromUnits(su.z)];
+    const m = moonPosWorldVec; // Will be converted in heliocentric J2000
+    const s = sunPosWorldVec;
+    const moonV = [fromUnits(m.x), fromUnits(m.y), fromUnits(m.z)];
+    const sunV  = [fromUnits(s.x), fromUnits(s.y), fromUnits(s.z)];
     const timeV = elpasedMsec + simulation.clock.masterEpochTime;
     return {
       time: timeV,        // msec
@@ -914,21 +937,23 @@ function animate(simulation) {
     };
   }
 
-  // Transform back in local coords and update sun position
-  const sunRealDistance = sunPosWorldVec.length();
-  sunPosVec.copy(sunPosWorldVec);
-  earthOrbitalPlane.worldToLocal(sunPosVec);
-
   // Use a rescaled distance for rendering purposes
+  sunPosVec.copy(sunLight.position);
   sunPosVec.normalize().multiplyScalar(SUN_LIGHT_DISTANCE);
   sunLight.position.copy(sunPosVec);
 
+  // Look at Earth (0,0,0)
+  origin.copy(tiltedEarth.position);
+  sunLight.worldToLocal(origin)
+  sunLight.lookAt(origin);
+
   // Update the end point of the line to match the sun's new position
   if (DEBUG)
-    set_sunline_length(sunPosVec);
+    set_sunline_length(sunPosWorldVec);
 
   if (observerState.object) {
     // Calculate the equivalent radius using the captured real distance
+    const sunRealDistance = sunPosWorldVec.length();
     const equivalentSunRadius = toUnits(SUN_RADIUS_KM) * (SUN_LIGHT_DISTANCE / sunRealDistance);
 
     // Check and emit celestial events

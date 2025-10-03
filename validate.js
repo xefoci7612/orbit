@@ -167,20 +167,18 @@ const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
 const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
 
 export function init_debug(scene, tiltedEarth, earth) {
-
   earth.add(primeMeridianLine);
+  scene.add(sunLine); // in world coordinates
   addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
-  scene.add(sunLine);
-
 }
 
 // Update the end point of the line to match the sun's new position
-export function set_sunline_length(sunPosVec) {
-  const sunPosition = sunPosVec.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
+export function set_sunline_length(sunWorldPos) {
+  const s = sunWorldPos.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
   const positions = sunLine.geometry.attributes.position.array;
-  positions[3] = sunPosition.x; // Update x of the second vertex
-  positions[4] = sunPosition.y; // Update y of the second vertex
-  positions[5] = sunPosition.z; // Update z of the second vertex
+  positions[3] = s.x; // Update x of the second vertex
+  positions[4] = s.y; // Update y of the second vertex
+  positions[5] = s.z; // Update z of the second vertex
 
   // Tell Three.js that the position attribute needs to be updated on the GPU
   sunLine.geometry.attributes.position.needsUpdate = true;
