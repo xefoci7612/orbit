@@ -60,6 +60,10 @@
 
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
+import { init_debug, set_sunline_length } from './validate.js';
+
+export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
+export const VALIDATE = false; // Run validation script instead of normal visualization mode
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
 const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
@@ -285,6 +289,11 @@ moonOrbitalFrame.add(moonOrbitalPlane);
 // Add Moon hierarchy to the scene
 scene.add(moonOrbitalFrame);
 
+// Add additional elements if debug is enabled
+if (DEBUG)
+    init_debug(scene, tiltedEarth, earth);
+
+
 // ============================================================================
 // INITIAL POSITIONS SETUP
 // ============================================================================
@@ -417,13 +426,6 @@ const observerState = {
     tempVec: new THREE.Vector3(),
 };
 
-// Helper for debugging: Add axes helpers to visualize local frames
-function addAxesHelper(object, size) {
-    const axesHelper = new THREE.AxesHelper(size);
-    object.add(axesHelper);
-    return axesHelper;
-}
-
 // Helper used by observer and orbit locking
 function createMarker(radius, color) {
   return new THREE.Mesh(
@@ -544,10 +546,6 @@ function enterObserverMode(object, surfacePoint) {
   const view = views.get(viewIndex);
   view.lockTo(marker, true);
 
-  // DEBUG CODE
-  //addAxesHelper(marker, 10);
-  //addAxesHelper(view.camera, 5);
-
   return viewIndex;
 }
 
@@ -649,60 +647,6 @@ function getMarker(color, position) {
 // Nodes lay on x-axis in local coordinates
 moonOrbitalPlane.add(getMarker(0xff00ff, [+rAsc, 0, 0])); // Magenta
 moonOrbitalPlane.add(getMarker(0xffff00, [-rDes, 0, 0])); // Yellow
-
-// ===== START: DEBUG CODE =====
-
-function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
-  const points = [];
-
-  // Loop from North Pole to South Pole
-  for (let i = 0; i <= segments; i++) {
-    // Interpolate the latitude from +90 degrees to -90 degrees
-    const latRad = Math.PI / 2 - (i / segments) * Math.PI;
-
-    // Calculate the 3D position using spherical coordinates (with Y as up)
-    const x = radius * Math.cos(latRad) * Math.cos(longitudeRad);
-    const y = radius * Math.sin(latRad);
-    const z = radius * Math.cos(latRad) * Math.sin(longitudeRad);
-
-    points.push(new THREE.Vector3(x, y, z));
-  }
-
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color: color, fog: false }); // fog:false keeps it visible from far away
-  const line = new THREE.Line(geometry, material);
-
-  return line;
-}
-
-// Create a red material for the line
-const sunLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-
-// Define the start and end points for the line.
-// The start is Earth's center (0,0,0). The end is a placeholder.
-const sunLinePoints = [];
-sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // Start point
-sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // End point (will be updated)
-
-const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
-
-// Create the line object
-const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
-scene.add(sunLine);
-
-// Create a bright yellow line to represent the Prime Meridian (0° longitude).
-// We make the radius slightly larger than the Earth's to prevent Z-fighting
-// (where the line flickers because it's at the same depth as the texture).
-const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
-
-// Add the line as a child of the Earth mesh. This ensures it inherits
-// all of the Earth's rotations (both daily spin and axial tilt).
-earth.add(primeMeridianLine);
-
-addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
-
-// ===== END: DEBUG CODE =====
-
 
 // ============================================================================
 // CELESTIAL BODY RUNTIME COMPUTATIONS
@@ -979,19 +923,9 @@ function animate(simulation) {
   sunPosVec.normalize().multiplyScalar(SUN_LIGHT_DISTANCE);
   sunLight.position.copy(sunPosVec);
 
-  // ===== START: DEBUG CODE =====
-
   // Update the end point of the line to match the sun's new position
-  const sunPosition = sunPosVec.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
-  const positions = sunLine.geometry.attributes.position.array;
-  positions[3] = sunPosition.x; // Update x of the second vertex
-  positions[4] = sunPosition.y; // Update y of the second vertex
-  positions[5] = sunPosition.z; // Update z of the second vertex
-
-  // Tell Three.js that the position attribute needs to be updated on the GPU
-  sunLine.geometry.attributes.position.needsUpdate = true;
-
-  // ===== END: DEBUG CODE =====
+  if (DEBUG)
+    set_sunline_length(sunPosVec);
 
   if (observerState.object) {
     // Calculate the equivalent radius using the captured real distance

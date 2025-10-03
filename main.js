@@ -4,8 +4,8 @@
 
 'use strict';
 
-import Simulation, { CELESTIAL_EVENTS } from './simulation.js';
-import { Validate, runValidation } from './validate.js';
+import Simulation, { CELESTIAL_EVENTS, VALIDATE } from './simulation.js';
+import { runValidation } from './validate.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 11 + 5); // HH:mm
@@ -59,7 +59,7 @@ function fromDMS(valueString) {
   return (Math.abs(totalSeconds) / 3600) * sign; // secs to degrees
 }
 
-const simulation = new Simulation(Validate);
+const simulation = new Simulation(VALIDATE);
 const renderer = simulation.getRenderer();
 
 // View indices from ViewManager
@@ -366,7 +366,7 @@ window.addEventListener('load', () => {
   });
 
   // If in validation mode run sampling code and exit
-  if (Validate) {
+  if (VALIDATE) {
     runValidation(simulation);
     return;
   }

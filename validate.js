@@ -1,14 +1,21 @@
 'use strict';
 
-// Set this to false to run the interactive UI instead of the validation script.
-export const Validate = true;
+// JPL Validation Script
+
+// JPL settings are:
+// Target Body: Sun [Sol]
+// Coordinate Center: 0°E, 0°N, 0 k
+// Time Specification: startDate to endDate, stepInDays
+// Table Settings: defaults
+
+import * as THREE from 'three';
 
 // Runs the simulation over a date range and triggers a CSV download
 export async function runValidation(sim) {
   // All configuration is in this single object for easy access
   const config = {
-    startDate: '2025-09-10T00:00:00Z',
-    endDate: '2025-10-10T00:00:00Z',
+    startDate: new Date('2025-09-10T09:34:03Z').toISOString(),
+    endDate: new Date('2025-12-10T09:34:03Z').toISOString(),
     stepInDays: 1,
     // How many simulation steps to process before pausing to keep the browser responsive
     chunkSize: 100,
@@ -96,4 +103,85 @@ function downloadFile(content, fileName, mimeType) {
 
   // Clean up by revoking the object URL to free up memory
   URL.revokeObjectURL(a.href);
+}
+
+
+// Helper debug functions
+
+// Physical properties (in kilometers, converted to scene units)
+const EARTH_RADIUS_KM = 6371; // Conventional radius for sphere approx.
+const MOON_RADIUS_KM = 1737.53;
+const SUN_RADIUS_KM = 695700;
+const MOON_DISTANCE_KM = 384400;    // average
+
+// Scale conversions
+const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
+const toUnits = km => km / KM_PER_UNIT;
+
+function addAxesHelper(object, size) {
+    const axesHelper = new THREE.AxesHelper(size);
+    object.add(axesHelper);
+    return axesHelper;
+}
+
+function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xffff00) {
+  const points = [];
+
+  // Loop from North Pole to South Pole
+  for (let i = 0; i <= segments; i++) {
+    // Interpolate the latitude from +90 degrees to -90 degrees
+    const latRad = Math.PI / 2 - (i / segments) * Math.PI;
+
+    // Calculate the 3D position using spherical coordinates (with Y as up)
+    const x = radius * Math.cos(latRad) * Math.cos(longitudeRad);
+    const y = radius * Math.sin(latRad);
+    const z = radius * Math.cos(latRad) * Math.sin(longitudeRad);
+
+    points.push(new THREE.Vector3(x, y, z));
+  }
+
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({ color: color, fog: false }); // fog:false keeps it visible from far away
+  const line = new THREE.Line(geometry, material);
+
+  return line;
+}
+
+// Create a bright yellow line to represent the Prime Meridian (0° longitude).
+// We make the radius slightly larger than the Earth's to prevent Z-fighting
+// (where the line flickers because it's at the same depth as the texture).
+const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
+
+// Create a red material for the line
+const sunLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+
+// Define the start and end points for the line.
+// The start is Earth's center (0,0,0). The end is a placeholder.
+const sunLinePoints = [];
+sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // Start point
+sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // End point (will be updated)
+
+const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
+
+// Create the line object
+const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
+
+export function init_debug(scene, tiltedEarth, earth) {
+
+  earth.add(primeMeridianLine);
+  addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
+  scene.add(sunLine);
+
+}
+
+// Update the end point of the line to match the sun's new position
+export function set_sunline_length(sunPosVec) {
+  const sunPosition = sunPosVec.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
+  const positions = sunLine.geometry.attributes.position.array;
+  positions[3] = sunPosition.x; // Update x of the second vertex
+  positions[4] = sunPosition.y; // Update y of the second vertex
+  positions[5] = sunPosition.z; // Update z of the second vertex
+
+  // Tell Three.js that the position attribute needs to be updated on the GPU
+  sunLine.geometry.attributes.position.needsUpdate = true;
 }
