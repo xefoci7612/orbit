@@ -120,6 +120,11 @@ const toUnits = km => km / KM_PER_UNIT;
 
 function addAxesHelper(object, size) {
     const axesHelper = new THREE.AxesHelper(size);
+    axesHelper.setColors(
+      new THREE.Color(0xff0000), // Red
+      new THREE.Color(0x00ff00), // Green
+      new THREE.Color(0x0000ff)  // Blue
+    );
     object.add(axesHelper);
     return axesHelper;
 }
@@ -153,13 +158,12 @@ function createMeridianLine(radius, longitudeRad = 0, segments = 64, color = 0xf
 const primeMeridianLine = createMeridianLine(toUnits(EARTH_RADIUS_KM) * 1.01);
 
 // Create a red material for the line
-const sunLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+const sunLineMaterial = new THREE.LineBasicMaterial({ color: 0xffff00 });
 
-// Define the start and end points for the line.
-// The start is Earth's center (0,0,0). The end is a placeholder.
+// Define the start and end points for the line. Will be updated by animation
 const sunLinePoints = [];
 sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // Start point
-sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // End point (will be updated)
+sunLinePoints.push(new THREE.Vector3(0, 0, 0)); // End point
 
 const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
 
@@ -172,13 +176,15 @@ export function init_debug(scene, tiltedEarth, earth) {
   addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
 }
 
-// Update the end point of the line to match the sun's new position
-export function set_sunline_length(sunWorldPos) {
-  const s = sunWorldPos.clone().normalize().multiplyScalar(toUnits(MOON_DISTANCE_KM / 2));
+// Update the sunline to match the earth new position
+export function set_sunline_length(earthPosWorldVec) {
+  const s = earthPosWorldVec.clone();
+  const d = toUnits(MOON_DISTANCE_KM / 2);
+  const offset = s.clone().normalize().multiplyScalar(d).negate();
+  const e = s.clone().add(offset);
   const positions = sunLine.geometry.attributes.position.array;
-  positions[3] = s.x; // Update x of the second vertex
-  positions[4] = s.y; // Update y of the second vertex
-  positions[5] = s.z; // Update z of the second vertex
+  s.toArray(positions, 0);
+  e.toArray(positions, 3);
 
   // Tell Three.js that the position attribute needs to be updated on the GPU
   sunLine.geometry.attributes.position.needsUpdate = true;

@@ -205,16 +205,21 @@ class View {
 };
 
 class ViewManager {
-  constructor(scene, renderer, startPosition) {
+  constructor(scene, renderer, defaultPosition) {
     this.activeIdx = null;
     this.views = [];
     this.scene = scene;
     this.renderer = renderer;
+    this.defaultPosition = defaultPosition; // relative to Earth
+  }
 
-    const mainViewIndex = this.create({ position: startPosition, up: new THREE.Vector3(0, 1, 0) },
-                                      { target: new THREE.Vector3(0, 0, 0)});
+  init(earthPosWorldVec) {
+    const target = earthPosWorldVec.clone();
+    const position = earthPosWorldVec.clone().add(this.defaultPosition);
+    const mainViewIndex = this.create({ position: position,
+                                        up: new THREE.Vector3(0, 1, 0) },
+                                      { target: target });
     this.setActive(mainViewIndex);
-    return mainViewIndex;
   }
 
   get(idx) {
@@ -222,7 +227,7 @@ class ViewManager {
   }
 
   getActive() {
-    return this.views[this.activeIdx];
+    return this.activeIdx !== null ? this.views[this.activeIdx] : null;
   }
 
   getOrbitLockedObjects() {
