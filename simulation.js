@@ -54,9 +54,10 @@
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { init_debug, set_sunline_length } from './validate.js';
+import { getEMB_data } from './jpl.js';
 
-export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
-export const VALIDATE = false; // Run validation script instead of normal visualization mode
+export const DEBUG = true; // Enable axes and objects visualizations for debug purposes
+export const VALIDATE = true; // Run validation script instead of normal visualization mode
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
 const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
@@ -139,15 +140,15 @@ const HORIZON_REFRACTION = toRadians(34.5 / 60);
                a counter-clockwise orbit moves toward -Z axis
 */
 
-// Target Body: Earth-Moon Barycenter [EMB], Coordinate Center: Solar System Barycenter (SSB) [code: 500@0]
+// Target Body: Earth-Moon Barycenter [EMB], Coordinate Center: Sun [500@10]
 const EMB_DATA = {
-     A: toUnits(1.486460015779342E+08),
-    EC: 2.348399511484001E-02,
-    IN: toRadians(9.565607274919776E-03),
-    OM: toRadians(2.345912713353362E+02),
-     W: toRadians(2.311018377459241E+02),
-    MA: toRadians(2.439258621986873E+02),
-    PR: 3.123666754246648E+07,
+     A: toUnits(1.495966654879858E+08),
+    EC: 1.665513342185162E-02,
+    IN: toRadians(3.420270671329570E-03),
+    OM: toRadians(1.748420625245392E+02),
+     W: toRadians(2.882246162588136E+02),
+    MA: toRadians(2.472367196453327E+02),
+    PR: 3.155774884048544E+07,
 };
 
 // Target Body: Moon [Luna], Coordinate Center: Earth-Moon Barycenter [500@3]
@@ -685,11 +686,29 @@ function getMoonEBMPosition(elapsedTime) {
   return [x_moon, 0, z_moon];
 }
 
+
 // Calculate the Earth-Moon barycenter (EBM) position in the Sun orbital plane
-function getEBMSunPosition(elapsedTime) {
+function getEBMSunPosition(elapsed) {
+
+  const time = MASTER_EPOCH.getTime() + elapsed * 1000; // in msec
+
+  const {before, after} = getEMB_data(time);
+
+  const t1 = before ? (time - before.time) / 1000 : null; // in seconds
+  const t2 =  after ? (time -  after.time) / 1000 : null;
 
   // Position of EBM in the heliocentric frame of solar orbital plane
-  const [x_ebm, z_ebm] = solveOrbit(elapsedTime, EMB_DATA);
+  const [x_ebm1, z_ebm1] = t1 ? solveOrbit(t1, before) : [null, null];
+  const [x_ebm2, z_ebm2] = t2 ? solveOrbit(t2,  after) : [null, null];
+
+  // Handle out of range conditions
+  if (x_ebm1 === null) return [x_ebm2, 0, z_ebm2];
+  if (x_ebm2 === null) return [x_ebm1, 0, z_ebm1];
+
+  // Interpolate the 2D points
+  const alpha = (time - before.time) / (after.time - before.time);
+  const x_ebm = x_ebm1 * (1 - alpha) + x_ebm2 * alpha;
+  const z_ebm = z_ebm1 * (1 - alpha) + z_ebm2 * alpha;
 
   // Convert to 3D with +Y axis perpendicular to orbital plane
   return [x_ebm, 0, z_ebm];
