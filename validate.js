@@ -15,7 +15,7 @@ export async function runValidation(sim) {
   // All configuration is in this single object for easy access
   const config = {
     startDate: new Date('2025-09-10T09:34:03Z').toISOString(),
-    endDate: new Date('2025-12-10T09:34:03Z').toISOString(),
+    endDate: new Date('2026-09-10T09:34:03Z').toISOString(),
     stepInDays: 1,
     // How many simulation steps to process before pausing to keep the browser responsive
     chunkSize: 100,
@@ -72,7 +72,7 @@ async function generateJplCsvContent(sim, config) {
     const rawData = sim.update();
 
     // Convert positions to the JPL coordinate system
-    const jplSunPosition = convertToJPL(rawData.sunPosition, true);
+    const jplSunPosition = convertToJPL(rawData.sunPosition);
     const jplMoonPosition = convertToJPL(rawData.moonPosition);
 
     // Format the CONVERTED data into a CSV row
