@@ -6,7 +6,6 @@
 
 import Simulation, { CELESTIAL_EVENTS, VALIDATE } from './simulation.js';
 import { runValidation } from './validate.js';
-import { init_jpl_data } from './jpl.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 11 + 5); // HH:mm
@@ -359,11 +358,7 @@ function animationLoop() {
   requestAnimationFrame(animationLoop);
 }
 
-window.addEventListener('load', async () => {
-
-  // Init JPL data
-  await init_jpl_data();
-
+window.addEventListener('load', () => {
   // Remove loder overlay
   elem.loaderOverlay.classList.add('hidden'); // trigger fade-out transition
   elem.loaderOverlay.addEventListener('transitionend', () => {
