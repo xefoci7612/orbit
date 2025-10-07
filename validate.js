@@ -41,18 +41,6 @@ export async function runValidation(sim) {
   }
 }
 
-// Converts a position vector from the simulation's internal units and coordinate
-// system to the JPL Horizons Ecliptic J2000 standard (in kilometers).
-function convertToJPL(simPositionInKm) {
-  const [sim_x_km, sim_y_km, sim_z_km] = simPositionInKm; // sim data is in km
-
-  // This transformation maps the simulation's world frame to the JPL Ecliptic J2000 frame
-  const jpl_x =   sim_x_km; // Matches directly
-  const jpl_y = - sim_z_km; // Negate the Z component
-  const jpl_z =   sim_y_km; // Use the Y component (which is 0 for the Sun)
-
-  return [jpl_x, jpl_y, jpl_z];
-}
 
 // Iterates through simulation steps and generates JPL-formatted CSV data
 async function generateJplCsvContent(sim, config) {
@@ -68,18 +56,14 @@ async function generateJplCsvContent(sim, config) {
     const currentDate = new Date(currentTimeMs);
     sim.setDate(currentDate);
 
-    // Get the raw data from the simulation
-    const rawData = sim.update();
+    // Perform a simulation step
+    const data = sim.update();
 
-    // Convert positions to the JPL coordinate system
-    const jplSunPosition = convertToJPL(rawData.sunPosition);
-    const jplMoonPosition = convertToJPL(rawData.moonPosition);
-
-    // Format the CONVERTED data into a CSV row
+    // Format data into a CSV row
     const row = [
       currentDate.toISOString(),
-      ...jplSunPosition,
-      ...jplMoonPosition
+      ...data.sunPosition,
+      ...data.moonPosition
     ].join(',');
     csvRows.push(row);
 
