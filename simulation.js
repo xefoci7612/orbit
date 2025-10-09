@@ -53,9 +53,10 @@
 
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
+import { CelestialEventManager } from './events.js';
 import { init_debug, set_sunline_length } from './validate.js';
 
-export const DEBUG = true; // Enable axes and objects visualizations for debug purposes
+export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Run validation script instead of normal visualization mode
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
@@ -91,6 +92,9 @@ const toUnits = km => km / KM_PER_UNIT;
 const fromUnits = u => u * KM_PER_UNIT;
 const toRadians = degrees => degrees * Math.PI / 180;
 const HMSToRadians = s => s.split(/\s+/).reduce((acc, v, i) => acc + parseFloat(v) / [1, 60, 3600][i], 0) * (Math.PI / 12);
+
+// Rescaled Sun distance for placing directional Sun light source
+const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
 
 // Time constants for simulation
 const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
@@ -470,8 +474,6 @@ const observerState = {
     object: null,
     marker:null, // in local coordinates
     observerOnEarth: false,
-    moonVisible: null,
-    sunVisible: null,
     viewIndex: null,
     tempVec: new THREE.Vector3(),
 };
@@ -583,8 +585,6 @@ function enterObserverMode(object, surfacePoint) {
 
   // Init observer events
   observerState.observerOnEarth = (object === earth);
-  observerState.moonVisible = isAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
-  observerState.sunVisible = isAboveHorizon(sunLight, 0); // FIXME can have one fake event if sun at set/rise
 
   // Create a new observer view placed on marker
   const eyeHeight = toUnits(5); // km above surface
@@ -771,7 +771,7 @@ function getMoonEBMPosition(current) {
   return [x, 0, z];
 }
 
-function isAboveHorizon(target, radius) {
+function heightAboveHorizon(target, radius) {
 
   // Get target's position in the observer frame
   const temp = observerState.tempVec;
@@ -790,43 +790,8 @@ function isAboveHorizon(target, radius) {
 
   // The object is visible if its center is above this negative threshold
   const visibilityThreshold = -(radiusCorrection + refractionCorrection);
-  return targetLocalPos.y > visibilityThreshold;
+  return targetLocalPos.y - visibilityThreshold;
 }
-
-// Event types
-export const CELESTIAL_EVENTS = {
-    RISE: 'rise',
-    SET: 'set',
-};
-
-class CelestialEventManager {
-  constructor() {
-    this.listeners = new Map();
-  }
-  on(eventType, callback) {
-    if (!this.listeners.has(eventType)) {
-        this.listeners.set(eventType, []);
-    }
-    this.listeners.get(eventType).push(callback);
-  }
-  emit(eventType, data) {
-    const listeners = this.listeners.get(eventType) || [];
-    listeners.forEach(callback => callback(data));
-  }
-  checkVisibility(object, name, radius, timeForward, prevState) {
-    const isVisible = isAboveHorizon(object, radius);
-    if (isVisible !== prevState) {
-        const atRise = (isVisible === timeForward);
-        if (atRise) {
-            this.emit(CELESTIAL_EVENTS.RISE, name);
-        } else {
-            this.emit(CELESTIAL_EVENTS.SET, name);
-        }
-        prevState = isVisible;
-    }
-    return isVisible;
-  }
-};
 
 // ============================================================================
 // ANIMATION LOOP
@@ -885,9 +850,6 @@ const SimClock = class {
 };
 
 const simStepData = { azEl: [], latLon: [] };
-
-// Rescaled Sun distance for placing directional Sun light source
-const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
 
 const earthPosWorldVec = new THREE.Vector3();
 const moonPosWorldVec = new THREE.Vector3();
@@ -1028,7 +990,7 @@ function animate(simulation) {
   // Set Sun light to look at Earth
   tiltedEarth.getWorldPosition(earthPosWorldVec);
   // The Earth's heliocentric ecliptic longitude is opposite to the Sun's geocentric ecliptic longitude
-  sunLight.target.position.copy(earthPosWorldVec.clone().negate());
+  sunLight.target.position.copy(earthPosWorldVec.clone().negate()); // FIXME
 
   // Update the end point of the line to match the sun's new position
   if (DEBUG) {
@@ -1036,18 +998,14 @@ function animate(simulation) {
   }
 
   if (observerState.object) {
-    // Calculate the equivalent radius using the captured real distance
-    const sunRealDistance = earthPosWorldVec.length();
-    const equivalentSunRadius = toUnits(SUN_RADIUS_KM) * (SUN_LIGHT_DISTANCE / sunRealDistance);
-
-    // Check and emit celestial events
+    // In dry run mode sample the proper value and return
+    if (simulation.dryRunFunction) {
+        return simulation.dryRunFunction();
+    }
+    // Update celestial events dependent on observer position
     const timeForward = (simulation.clock.speed() > 0);
-    observerState.moonVisible = simulation.eventManager.checkVisibility(
-        tiltedMoon, "Moon", toUnits(MOON_RADIUS_KM), timeForward, observerState.moonVisible
-    );
-    observerState.sunVisible = simulation.eventManager.checkVisibility(
-        sunLight, "Sun", equivalentSunRadius, timeForward, observerState.sunVisible
-    );
+    const sunDistance = earthPosWorldVec.length();
+    simulation.eventManager.update(timeForward, sunDistance, tiltedMoon, sunLight);
 
     // If we are in observer view pass elevation and azimuth
     const view = views.get(observerState.viewIndex);
@@ -1070,6 +1028,18 @@ function animate(simulation) {
   return simStepData;
 }
 
+// Functions used in dry run to sample the requested sim output value
+function sunHeight() {
+  // Calculate the equivalent radius using the captured real distance
+  const sunDistance = earthPosWorldVec.length();
+  const equivalentSunRadius = toUnits(SUN_RADIUS_KM) * (SUN_LIGHT_DISTANCE / sunDistance);
+  return heightAboveHorizon(sunLight, equivalentSunRadius);
+}
+
+function moonHeight() {
+  return heightAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
+}
+
 // ============================================================================
 // EXPORT CLASS
 // ============================================================================
@@ -1078,12 +1048,14 @@ class Simulation {
   constructor(validateMode) {
     // Don't render and return Moon / Earth positions
     this.validateMode = validateMode;
+    this.dryRunFunction = null;
+    this.dryRunFunctions = [sunHeight, sunHeight, moonHeight, moonHeight];
 
     // Our simulation clock
     this.clock = new SimClock(MASTER_EPOCH);
 
     // Create a new event manager and expose its 'on' method
-    this.eventManager = new CelestialEventManager();
+    this.eventManager = new CelestialEventManager(this, heightAboveHorizon);
     this.on = this.eventManager.on.bind(this.eventManager);
 
     this.update = () => animate(this);
@@ -1092,6 +1064,7 @@ class Simulation {
     this.speed = this.clock.speed.bind(this.clock);
     this.setSpeed = this.clock.setSpeed.bind(this.clock);
     this.togglePause = this.clock.togglePause.bind(this.clock);
+    this.findNextEvent = this.eventManager.findNextEvent.bind(this.eventManager);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
@@ -1099,6 +1072,9 @@ class Simulation {
     this.placeObserverAt = placeObserverAt;
     this.exitObserverMode = exitObserverMode;
     this.pickObject = pickObject;
+  }
+  setDryRunFunction(idx) {
+    this.dryRunFunction = (idx === null ? null : this.dryRunFunctions[idx]);
   }
   getRenderer() {
     return renderer;

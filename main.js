@@ -4,7 +4,8 @@
 
 'use strict';
 
-import Simulation, { CELESTIAL_EVENTS, VALIDATE } from './simulation.js';
+import Simulation, { VALIDATE } from './simulation.js';
+import { CELESTIAL_EVENTS } from './events.js';
 import { runValidation } from './validate.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
@@ -84,6 +85,10 @@ const elementIds = {
   elevationOut: 'elevation-out',
   latitudeOut: 'latitude-out',
   longitudeOut: 'longitude-out',
+  eventGroup: 'event-group',
+  prevEvent: 'prev-event',
+  eventIndicator: 'event-indicator',
+  nextEvent: 'next-event',
 };
 
 const elem = {};
@@ -294,20 +299,50 @@ elem.speedSlider.oninput = speedSliderChanged;
 elem.observerBtn.onclick = () => {
   const newState = observerUI.state === "idle" ? "place" : "idle";
   observerUI.setState(newState);
+  if (newState === "idle") elem.eventGroup.hidden = true;
 };
 
-elem.btnPlay.onclick = ()=>{
-  elem.btnPlay.textContent = simulation.togglePause() ? '⏸' : '▶';
+elem.btnPlay.onclick = () => {
+  const isPlay = simulation.togglePause();
+  elem.btnPlay.textContent = isPlay ? '⏸' : '▶';
+  if (isPlay) elem.eventGroup.hidden = true;
 };
 
-elem.btnReverse.onclick = ()=> {
+elem.btnReverse.onclick = () => {
   simulation.reverseSpeed();
   updateSpeedUI();
 };
 
-elem.btnReset.onclick = ()=>{
+elem.btnReset.onclick = () => {
   simulation.reset();
   updateSpeedUI();
+  updateDateTimeUI();
+};
+
+function updateEventDisplay(event) {
+  elem.eventIndicator.classList.remove(...CELESTIAL_EVENTS.names);
+  elem.eventIndicator.classList.add(event);
+  elem.eventIndicator.textContent = elem.eventIndicator.dataset[event];
+  elem.eventIndicator.title = event.charAt(0).toUpperCase() + event.slice(1);
+}
+
+function getNextEvent(delta) {
+  const num = CELESTIAL_EVENTS.names.length;
+  const curEvent = elem.eventIndicator.classList[0];
+  const curId = CELESTIAL_EVENTS.names.indexOf(curEvent);
+  const nextIndex = (curId + delta + num) % num; // in [0, 3] range
+  return CELESTIAL_EVENTS.names[nextIndex];
+}
+
+elem.prevEvent.onclick = () => {
+  const event = elem.eventIndicator.classList[0];
+  simulation.findNextEvent(event, false);
+  updateDateTimeUI();
+};
+
+elem.nextEvent.onclick = () => {
+  const event = elem.eventIndicator.classList[0];
+  simulation.findNextEvent(event, true);
   updateDateTimeUI();
 };
 
@@ -320,13 +355,21 @@ addEventListener('resize', () => {
 });
 
 simulation.on(CELESTIAL_EVENTS.RISE, (name) => {
-  console.log(`${name}rise detected!`);
-  elem.btnPlay.onclick();
+  const event = name.toLowerCase() + "rise";
+  updateEventDisplay(event);
+  elem.eventGroup.hidden = false;
+  const inPause = (elem.btnPlay.textContent === '▶');
+  if (!inPause)
+    elem.btnPlay.onclick();
 });
 
 simulation.on(CELESTIAL_EVENTS.SET, (name) => {
-  console.log(`${name}set detected!`);
-  elem.btnPlay.onclick();
+  const event = name.toLowerCase() + "set";
+  updateEventDisplay(event);
+  elem.eventGroup.hidden = false;
+  const inPause = (elem.btnPlay.textContent === '▶');
+  if (!inPause)
+    elem.btnPlay.onclick();
 });
 
 function animationLoop() {

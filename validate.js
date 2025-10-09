@@ -164,7 +164,7 @@ export function init_debug(scene, tiltedEarth, earth) {
 export function set_sunline_length(earthPosWorldVec) {
   const s = earthPosWorldVec.clone();
   const d = toUnits(MOON_DISTANCE_KM / 2);
-  const offset = s.clone().normalize().multiplyScalar(d).negate();
+  const offset = s.clone().normalize().multiplyScalar(d); // FIXME .negate();
   const e = s.clone().add(offset);
   const positions = sunLine.geometry.attributes.position.array;
   s.toArray(positions, 0);
