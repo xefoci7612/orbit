@@ -154,21 +154,27 @@ const sunLineGeometry = new THREE.BufferGeometry().setFromPoints(sunLinePoints);
 // Create the line object
 const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
 
+export let scene_axes = null;
+
 export function init_debug(scene, tiltedEarth, earth) {
-  earth.add(primeMeridianLine);
-  scene.add(sunLine); // in world coordinates
-  addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
+  if (sunLine.parent !== scene) { // only once
+    scene.add(sunLine); // in world coordinates
+    earth.add(primeMeridianLine);
+    addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
+    scene_axes = addAxesHelper(scene, toUnits(4 * EARTH_RADIUS_KM));
+  }
 }
 
-// Update the sunline to match the earth new position
+// Update the sunline to match the earth new position, we assume
+// sunLight is at the World Origin.
 export function set_sunline_length(earthPosWorldVec) {
-  const s = earthPosWorldVec.clone();
   const d = toUnits(MOON_DISTANCE_KM / 2);
-  const offset = s.clone().normalize().multiplyScalar(d); // FIXME .negate();
-  const e = s.clone().add(offset);
+  const endPoint = earthPosWorldVec;
+  const ofs = endPoint.clone().normalize().multiplyScalar(d).negate(); // Earth -> Sun
+  const startPoint = ofs.add(endPoint);
   const positions = sunLine.geometry.attributes.position.array;
-  s.toArray(positions, 0);
-  e.toArray(positions, 3);
+  startPoint.toArray(positions, 0);
+  endPoint.toArray(positions, 3);
 
   // Tell Three.js that the position attribute needs to be updated on the GPU
   sunLine.geometry.attributes.position.needsUpdate = true;

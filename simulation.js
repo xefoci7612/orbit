@@ -13,48 +13,55 @@
 
   ICRS Heliocentric Ecliptic J2000 Frame
 
-    J2000 Frame uses a standard heliocentric, right-handed coordinate system to
-    model the Solar System's geometry.
+    Ecliptic J2000 Frame refers to Heliocentric Ecliptic coordinates according to the
+    International Celestial Reference System (ICRS) at the J2000.0 epoch.
+    It is a heliocentric, right-handed coordinate system.
 
     EPOCH (J2000.0):
         The reference frame is fixed to a specific moment: January 1, 2000, at 12:00
         Terrestrial Time (TT), which is Julian Date 2451545.0 TT.
 
     ORIGIN:
-        The formal origin (0,0,0) is the Barycenter of the Solar System
+        The formal origin (0,0,0) is the Barycenter of the Solar System (SSB)
 
     THE FUNDAMENTAL PLANE (THE XY PLANE):
         This is the Earth's mean orbital plane as it existed at the J2000.0 epoch,
         also known as the "Ecliptic of J2000.0"
 
     AXES DEFINITION:
-      +X Axis: Points from the Sun towards the Vernal Equinox as it was at the J2000.0
-               epoch. This is the principal direction of the reference frame.
+     +X Axis: The principal direction. It points from the Solar System Barycenter
+              towards the mean Vernal Point as defined at the J2000.0 epoch.
+              The Vernal Point (First Point of Aries) is one of the two points at the
+              intersection of the celestial equator and the ecliptic, and its direction
+              is defined by the Earth-to-Sun vector at the instant of the Vernal Equinox.
 
       +Z Axis: Points towards the North Ecliptic Pole at the J2000.0 epoch. It is
                perpendicular to the XY plane
 
       +Y Axis: Completes the right-handed coordinate system (X × Y = Z). This axis
-               points towards the Summer Solstice direction. At the Vernal Equinox,
-               the +Y axis has same direction as Earth's velocity.
+               points towards the Winter Solstice direction. At the Vernal Equinox,
+               the +Y axis has opposite direction of Earth's velocity.
 
 
   Scene World Coordinates Frame
 
-   We use a right-handed heliocentric coordinate system (referred as World Coordinates)
-   adapted to Three.js conventions for axes.
+  We use a right-handed heliocentric coordinate system (referred as World Coordinates)
+  adapted to Three.js conventions for axes.
 
-    Differences from ICRS Heliocentric Ecliptic J2000 Frame:
+  Differences from ICRS Heliocentric Ecliptic J2000 Frame:
 
-      +Y Axis: Is the +Z Axis in J2000 Frame (UP direction)
+     ORIGIN: The formal origin (0,0,0) is the center of the Sun
 
-      +Z Axis: Is the -Y Axis in the Ecliptic J2000 Frame
+    +Y Axis: Is the +Z Axis in ICRS Frame (UP direction)
+
+    +Z Axis: Is the -Y Axis in the ICRS Frame. It points toward Summer Solstice, at
+             Vernal Equinox time, the +Z axis has same direction of Earth's velocity.
 */
 
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
-import { init_debug, set_sunline_length } from './validate.js';
+import { init_debug, set_sunline_length, scene_axes } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Run validation script instead of normal visualization mode
@@ -91,6 +98,7 @@ const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
 const toUnits = km => km / KM_PER_UNIT;
 const fromUnits = u => u * KM_PER_UNIT;
 const toRadians = degrees => degrees * Math.PI / 180;
+const toDegrees = rad => rad * 180 / Math.PI;
 const HMSToRadians = s => s.split(/\s+/).reduce((acc, v, i) => acc + parseFloat(v) / [1, 60, 3600][i], 0) * (Math.PI / 12);
 
 // Rescaled Sun distance for placing directional Sun light source
@@ -102,6 +110,8 @@ const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
 // Master Epoch of JPL data sources
 const MASTER_EPOCH = new Date('2025-09-10T09:34:03Z');
 const J2000_EPOCH = new Date('2000-01-01T12:00:00Z');
+const VERNAL_EQUINOX_2025 = new Date('2025-03-20T09:01:00Z');
+const VERNAL_EQUINOX_JPL = new Date('2000-03-20T07:26:28Z'); // 2000-Mar-20 07:26:28 TDB
 
 const HOUR = 3600; // In SI seconds
 const SOLAR_DAY = 24 * HOUR; // Mean Solar Day
@@ -134,11 +144,12 @@ const HORIZON_REFRACTION = toRadians(34.5 / 60);
 
 // Target Body: Earth, Coordinate Center: Sun
 const EARTH_J2000 = {
-  A: toUnits(1.00000011 * AU),    // Semi-major axis in AU
-  EC: 0.01671022,        // Eccentricity
-  IN: toRadians(0.00005),// Inclination to Ecliptic
-  // Note: For near-zero inclinations, Longitude of Ascending Node (OM) is ill-defined
-  // and Longitude of Perihelion (W_bar or ϖ) is used instead of Argument of Periapsis.
+  A: toUnits(1.00000011 * AU), // Semi-major axis in AU
+  EC: 0.01671022,              // Eccentricity
+  IN: toRadians(0.00005),      // Inclination to Ecliptic
+  // For near-zero inclinations, Longitude of Ascending Node (OM) is
+  // ill-defined and Longitude of Perihelion (W_bar or ϖ) is used
+  // instead of Argument of Periapsis.
   W_bar: toRadians(102.94719), // Longitude of Perihelion (ϖ)
   L: toRadians(100.46435),     // Mean Longitude (L = ϖ + M)
 };
@@ -147,7 +158,7 @@ const EARTH_J2000 = {
 const EARTH_CHANGE_RATES = {
   A: toUnits(-0.00000005 * AU),
   EC: -0.00003804,
-  IN: toRadians(-46.94 / 3600), // Note: This reflects change relative to the ecliptic of the date
+  IN: toRadians(-46.94 / 3600), // From arcsecs, change relative to the ecliptic of the date
   W_bar: toRadians(1198.28 / 3600), // From arcsecs, rate for Longitude of Perihelion (ϖ)
   L: toRadians(129597740.63 / 3600), // From arcsecs, rate for Mean Longitude (L)
 }
@@ -175,21 +186,20 @@ const MOON_CHANGE_RATES = {
 }
 
 /*
-    Moon and Earth Ephemeris (osculating elements) from JPL Horizons
+    Moon Ephemeris (osculating elements) from JPL Horizons
 
     https://ssd.jpl.nasa.gov/horizons/app.html
 
-    The raw values (IN, OM, W, etc.) are generated by JPL Horizons.
-
-    The refrence frame is the ICRS Ecliptic at J2000 Epoch with origin
-    at EBM and at Sun respectively for Moon and EBM (Earth) data
-
-    Simulation uses the JPL Ephemeris to solve an elliptical 2D orbit
-    defined as follow:
+    The reference frame of data source is the ICRS Ecliptic at J2000 Epoch
+    with origin at Earth-Moon Barycenter (EBM)
 
     EPOCH: JPL osculating elements refer to MASTER_EPOCH time
 
-    ORIGIN: The origin (0,0) is the nearest focus of the orbital ellipses
+    To solve a 2D orbital ellipses we use a 3D local frame defined as following:
+
+    ORIENTATION: Local frame is a right-handed coordinate system
+
+    ORIGIN: The origin (0,0,0) is the nearest focus of the orbital ellipses
 
     THE ORBITAL PLANE: The local XZ plane
 
@@ -197,11 +207,11 @@ const MOON_CHANGE_RATES = {
       +X Axis: This is the principal direction, defined as the "line of nodes".
                It points from the focus towards the Ascending Node
 
-      +Y Axis: Perpendicular to the orbital plane, pointing towards the orbital
-               north pole. At the Ascending Node the orbit moves from -Y to +Y
+      +Y Axis: Perpendicular to the orbital plane, this is the UP direction
+               pointing toward orbital north pole
 
-      +Z Axis: Completes the right-handed system. At the Ascending Node
-               a counter-clockwise orbit moves toward -Z axis
+      +Z Axis: At the Ascending Node a counter-clockwise orbit (seen from +Y)
+               has velocity with direction -Z
 */
 
 // Target Body: Moon [Luna], Coordinate Center: Earth-Moon Barycenter [500@3]
@@ -273,8 +283,11 @@ scene.add(sunLight.target); // target must be added too!
 const earthOrbitalPlane = new THREE.Object3D();
 scene.add(earthOrbitalPlane);
 
-// EMB (Earth-Moon Barycenter) orbits around the Sun, we rotate Y axis
-// in animation so that local +X axis always points toward Vernal Equinox
+// EMB (Earth-Moon Barycenter) pivot. It is positioned within the
+// earthOrbitalPlane to follow the elliptical path. An inverse
+// rotation is applied to it, cancelling the parent's rotation.
+// The result is that this pivot's local axes remain aligned with
+// the World axes, providing a stable reference for Earth's axial tilt.
 const embPivot = new THREE.Object3D();
 earthOrbitalPlane.add(embPivot);
 
@@ -289,7 +302,8 @@ const moonNodesOrbitalPlane = new THREE.Object3D();
 scene.add(moonNodesOrbitalPlane);
 
 // The Moon absidal orbital plane
-// EMB is at the origin, local +X axis points toward periapsis / perigee
+// EMB is at the origin, same XZ plane as the nodes orbital plane,
+// local +X axis points toward periapsis / perigee
 const moonAbsidalOrbitalPlane = new THREE.Object3D();
 moonNodesOrbitalPlane.add(moonAbsidalOrbitalPlane);
 
@@ -312,8 +326,8 @@ tiltedMoon.add(moon);
 //
 // Earth with tilted vertical axis, it is the object that orbits
 // around EMB point.
-// In animation is set at a computed offset from EMB, local
-// +X axis points toward Vernal Equinox (same as parent)
+// In animation is set at a computed offset from EMB, local +X axis
+// is always aligned with World +X axis (toward Vernal Point)
 const tiltedEarth = new THREE.Object3D();
 embPivot.add(tiltedEarth);
 
@@ -328,7 +342,8 @@ tiltedEarth.add(earth);
 
 // Delayed init after inital orbital parameters have been updated
 function init_moon_path(current) {
-  // An elliptical curve to show Moon's orbit, local +X axis points toward periapsis / perigee
+  // An elliptical curve to show Moon's orbit, local +X axis points
+  // toward periapsis / perigee
   const [points, rMoonAsc, rMoonDes] = ellipticCurve(current);
   const vertexBuffer = new THREE.BufferAttribute(points, 3);
   const orbitPathGeo = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
@@ -364,107 +379,9 @@ const defaultCameraPos = (function() {
 // when we know Earth position
 const views = new ViewManager(scene, renderer, defaultCameraPos);
 
-
 // ============================================================================
-// INITIAL POSITIONS SETUP
+// OBSERVER VIEW MANAGEMENT
 // ============================================================================
-
-// Earth Prime Meridian at master epoch time
-//
-// Earth Texture map is loaded already centered on 0° longitude, i.e. the Prime
-// Meridian intercept the +X axis on the equator in our earth object local reference.
-// We convert the Greenwich Apparent Sidereal Time (GAST) at master epoch into
-// a positive rotation along +Y axis (North Pole). We also add a 180 degree offset
-// to account for world X-axis to be in opposite direction (from Sun toward Earth)
-const InitialEarthY = EARTH_DATA.L_Ap_Sid_Time + Math.PI;
-
-// Earth's obliquity (axial tilt) at Vernal Equinox
-//
-// The Earth's tilt axis at equinox time is perpendicular to the world X axis.
-// So to tilt the axis we rotate around x-axis. The tilt must be directed towards
-// the Winter Solstice (so that at Summer Solstice the North Pole will be tilted
-// toward the sun), because the positive +X axis points from Sun toward Earth
-// the rotation is counter-clockwise (positive).
-const InitialTiltedEarthX = toRadians(EARTH_AXIAL_TILT);
-
-// Calculate the initial precesssion, the rotation of Y-axis since J2000 Epoch
-// The rotation is retrograde (clockwise), hence the negative sign
-const timeSinceJ2000 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
-const InitialPrecessionY = -EARTH_AXIAL_SPEED * timeSinceJ2000;
-
-// Earth's Orbit Inclination to Ecliptic
-//
-// The local +X axis of the orbital plane points towards the Ascending Node,
-// the point where Earth's orbit crosses the J2000 Ecliptic plane while moving
-// into the northern hemisphere.
-// Earth's orbit is prograde (counter-clockwise). A positive rotation around the
-// local +X axis correctly lifts the subsequent part of the orbit into the positive
-// ("North") Y direction, achieving the "ascending" motion.
-//const InitialEarthOrbitX = EMB_DATA.IN;
-
-// Earth's Orbital Plane Orientation (Longitude of the Ascending Node)
-//
-// The longitude of the Ascending Node (OM) specifies the orientation
-// of Earth's orbital plane within the fixed J2000 Ecliptic frame.
-// The OM angle is measured counter-clockwise from the Vernal Equinox
-// (the frame's +X axis) to the Ascending Node.
-//
-// The precession of this angle is extremely slow (apsidal precession,
-// ~112,000 years) and is treated as static in this simulation.
-//const InitialEarthOrbitY = EMB_DATA.OM;
-
-// Moon rotation
-//
-// Moon Texture map is loaded centered on 0° longitude, the Prime Meridian of
-// the Moon is aligned with its local +X axis.
-// Moon's world frame is it's orbital plane and its +X axis is the direction
-// from the EMB focus to the Ascending Node, so when the Moon is at the Ascending
-// Node the 0° longitude will be on the far side of the Moon. We rotate around +Y
-// axis of 180 degree to move it facing Earth.
-const InitialMoonY = Math.PI;
-
-// Moon's obliquity (axial tilt)
-//
-// Cassini's 3rd Law dictates that the Moon's spin axis, its orbital pole,
-// and the Ecliptic Pole are always coplanar. This has a practical consequence:
-// the Moon's axial tilt is applied in the same plane as its orbital inclination.
-//
-// 1. The Moon's orbit is inclined by rotating the orbital plane around its
-//    local X-axis (the line of nodes).
-//
-// 2. Therefore, the Moon's axial tilt must also be a rotation around the local
-//    X-axis of its parent orbital plane.
-//
-// Cassini's 3rd Law states also that pole of ecliptic (~1.54°) is always *between*
-// the 2 poles of orbit (~5.1°) and spin (~6.68°), so the Moon's spin axis is "tilted
-// back" from its orbital plane. This means the axial tilt rotation is in the opposite
-// direction to the orbital inclination rotation.
-// We apply this by rotating the tiltedMoon node around its local X-axis, which is
-// the same axis as its parent's rotation but with an opposite sign.
-const InitialTiltedMoonX = -toRadians(MOON_AXIAL_TILT);
-
-// Moon's orbit inclination to Ecliptic
-//
-// The Moon's orbit is counter-clockwise (prograde) and at ascending node
-// it moves toward -Z. A positive (counter-clockwise) rotation around the
-// local +X axis correctly lifts the subsequent part of the orbit into the
-// positive ("North") Y direction, achieving the "ascending" motion.
-//const InitialMoonOrbitX = MOON_DATA.IN;
-
-// Moon's orbital plane orientation (Longitude of the Ascending Node)
-//
-// The longitude of the Ascending Node (OM) specifies the orientation
-// of Moon's orbital plane within the local frame centered on EBM
-// The OM angle is measured counter-clockwise from the the frame's +X axis
-// to the Ascending Node.
-//
-// The line of nodes of the Moon's orbit precesses in a retrograde (backward)
-// direction, which is the opposite to the Moon's counter-clockwise motion
-// around Earth.
-//const InitialAscendingNodePivotY = MOON_DATA.OM;
-
-
-// **********************************************************************
 
 // List of objects that can have a locked view on them
 const trackableBodies = [earth, moon];
@@ -507,31 +424,30 @@ function attachToSurface(marker, object, surfacePoint) {
 
 // Orient the local coordinate frame of an object on the surface of a parent body
 function orientToSurface(marker) {
+  // Point on the surface must be in parent coordinates
+  const p = marker.position;
 
-    // Point on the surface must be in parent coordinates
-    const p = marker.position;
+  // Calculate Local Y-axis (outward normal from sphere)
+  const y_local = p.clone().normalize();
 
-    // Calculate Local Y-axis (outward normal from sphere)
-    const y_local = p.clone().normalize();
+  // Calculate Local X-axis as tangential velocity (z, 0, -x) for Y-axis rotation
+  const v = new THREE.Vector3(p.z, 0, -p.x);
 
-    // Calculate Local X-axis as tangential velocity (z, 0, -x) for Y-axis rotation
-    const v = new THREE.Vector3(p.z, 0, -p.x);
+  // Detect special case of point exactly on the global Y-axis (pole) and
+  // fallback on parent X-axis
+  const onY = v.lengthSq() === 0;
+  const x_local = onY ? new THREE.Vector3(1, 0, 0) : v.normalize();
 
-    // Detect special case of point exactly on the global Y-axis (pole) and
-    // fallback on parent X-axis
-    const onY = v.lengthSq() === 0;
-    const x_local = onY ? new THREE.Vector3(1, 0, 0) : v.normalize();
+  // Local Z-axis is cross product of x_local and y_local for right-handed system
+  const z_local = new THREE.Vector3().crossVectors(x_local, y_local);
 
-    // Local Z-axis is cross product of x_local and y_local for right-handed system
-    const z_local = new THREE.Vector3().crossVectors(x_local, y_local);
+  // Rotation matrix whose columns are the local basis vectors (x_local, y_local, z_local)
+  // This matrix transforms from point's local frame to its parent's (sphere's) frame.
+  const rotationMatrix = new THREE.Matrix4();
+  rotationMatrix.makeBasis(x_local, y_local, z_local);
 
-    // Rotation matrix whose columns are the local basis vectors (x_local, y_local, z_local)
-    // This matrix transforms from point's local frame to its parent's (sphere's) frame.
-    const rotationMatrix = new THREE.Matrix4();
-    rotationMatrix.makeBasis(x_local, y_local, z_local);
-
-    // Set point's quaternion from this rotation matrix
-    marker.quaternion.setFromRotationMatrix(rotationMatrix);
+  // Set point's quaternion from this rotation matrix
+  marker.quaternion.setFromRotationMatrix(rotationMatrix);
 }
 
 // Return any trackable object under mouse
@@ -806,7 +722,7 @@ const SimClock = class {
     this.running = true;
   }
   reset() {
-    this.simulationTimeAtPause = Date.now();
+    this.simulationTimeAtPause = Date.now(); // VERNAL_EQUINOX_2025.getTime();
     this.realTimeAtResume = this.simulationTimeAtPause;
     this.speedX = SIM_TIME_SPEED_UP;
   }
@@ -856,8 +772,9 @@ const moonPosWorldVec = new THREE.Vector3();
 const embPosWorldVec = new THREE.Vector3();
 const toWorldQuat = new THREE.Quaternion();
 
-// Calculate the current orbital elements using the rates of change
-function updateOrbitalParameters(elapsedSeconds, data, changeRate) {
+// Propagate source data at Epoch to current simulation time
+// according to known rotation speeds (change rates)
+function propagateOrbitalParameters(elapsedSeconds, data, changeRate) {
 
   const T0 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000;
   const timeSinceJ2000 = T0 + elapsedSeconds;
@@ -885,17 +802,19 @@ function animate(simulation) {
 
   // Three.js rotation order is 'XYZ' but astronomical standard defines
   // the orientation of an orbital plane in a specific sequence:
-  // 1. Rotate around the Pole (OM)
-  // 2. Tilt around the Line of Nodes (IN)
+  // 1. Rotate around the Pole
+  // 2. Tilt around the Line of Nodes
 
   const elpasedMsec = simulation.clock.elapsed(); // in msecs
   const elapsedSeconds = elpasedMsec / 1000;
 
-  const currentEarth = updateOrbitalParameters(elapsedSeconds, EARTH_J2000, EARTH_CHANGE_RATES);
-  const currentMoon = updateOrbitalParameters(elapsedSeconds, MOON_J2000, MOON_CHANGE_RATES);
+  // Propagate source data at Epoch to current simulation time
+  // according to known rotation speeds (change rates)
+  const currentEarth = propagateOrbitalParameters(elapsedSeconds, EARTH_J2000, EARTH_CHANGE_RATES);
+  const currentMoon = propagateOrbitalParameters(elapsedSeconds, MOON_J2000, MOON_CHANGE_RATES);
 
   // Initial static rotations of the Sun orbital plane
-  // Set the Euler rotation order to 'YXZ' to matche the
+  // Set the Euler rotation order to 'YXZ' to match the
   // astronomical convention for an orbital plane.
   earthOrbitalPlane.rotation.order = 'YXZ';
   earthOrbitalPlane.rotation.x = currentEarth.IN;
@@ -937,17 +856,41 @@ function animate(simulation) {
   tiltedMoon.position.set(xm, ym, zm);
 
   // Moon's axis tilt
-  tiltedMoon.rotation.x = InitialTiltedMoonX;
+  // Cassini's 3rd Law  dictates that the Moon's spin axis, its orbital pole,
+  // and the Ecliptic Pole are always coplanar, so pole of ecliptic (~1.54°)
+  // is always *between* the 2 poles of orbit (~5.1°) and spin (~6.68°) and
+  // the Moon's spin axis is "tilted back" from its orbital plane. Moon orbital
+  // plane inclination to Ecliptic is done rotating around its local X axes of
+  // a positive angle, so we rotate around X axis with an opposite sign.
+  tiltedMoon.rotation.x = -toRadians(MOON_AXIAL_TILT);
 
   // Moon rotation around its Pole axis, in tidal locking with Earth
-  moon.rotation.y = InitialMoonY + MOON_ROTATION_SPEED * elapsedSeconds;
+  // Moon texture map is loaded centered on 0° longitude, the Prime Meridian of
+  // the Moon is aligned with its local +X axis.
+  // Moon's absidal local frame +X axis direction goes from the EMB the Perigee,
+  // so when the Moon is at the Perigee the 0° longitude will be on the far side
+  // of the Moon. We rotate around Y axis of 180 degrees to move it facing Earth.
+  const moonRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD; // in tidal lock
+  moon.rotation.y = Math.PI + moonRotationSpeed * elapsedSeconds;
 
-  // Earth axial precession in clockwise (negative) direction
-  tiltedEarth.rotation.x = InitialTiltedEarthX;
-  tiltedEarth.rotation.y = InitialPrecessionY - EARTH_AXIAL_SPEED * elapsedSeconds;
+  // Earth's axial tilt and retrograde (clockwise) precession.
+  // Tilt is a negative rotation on the X-axis (Vernal Point direction). This orients
+  // the North Pole towards the Winter Solstice direction, correctly setting up
+  // the seasons. Precession is a slow, negative rotation on the new, tilted Y-axis.
+  const timeSinceJ2000 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
+  const earthPrecessionSpeed = 2 * Math.PI / EARTH_AXIAL_PERIOD;
+  tiltedEarth.rotation.x = -toRadians(EARTH_AXIAL_TILT);
+  tiltedEarth.rotation.y = -earthPrecessionSpeed * (elapsedSeconds + timeSinceJ2000);
 
-  // Rotate Earth
-  earth.rotation.y = InitialEarthY + EARTH_ROTATION_SPEED * elapsedSeconds;
+  // Earth daily rotation
+  // Earth texture map is loaded centered on 0° longitude, the Prime Meridian of
+  // the Earth is aligned with its local +X axis that is also the world +X axis
+  // and points from Earth toward Vernal Point. Greenwich Apparent Sidereal
+  // Time (GAST) is the angle between the Vernal Point and the Prime Meridian at
+  // master epoch time.
+  const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
+  const gast = EARTH_DATA.L_Ap_Sid_Time ;
+  earth.rotation.y = gast + earthRotationSpeed * elapsedSeconds;
 
   // Earth placement according to barycenter rule
   //
@@ -989,12 +932,13 @@ function animate(simulation) {
 
   // Set Sun light to look at Earth
   tiltedEarth.getWorldPosition(earthPosWorldVec);
-  // The Earth's heliocentric ecliptic longitude is opposite to the Sun's geocentric ecliptic longitude
-  sunLight.target.position.copy(earthPosWorldVec.clone().negate()); // FIXME
+  sunLight.target.position.copy(earthPosWorldVec);
 
   // Update the end point of the line to match the sun's new position
   if (DEBUG) {
     set_sunline_length(earthPosWorldVec);
+    //embPivot.getWorldPosition(embPosWorldVec);
+    //scene_axes.position.copy(embPosWorldVec);
   }
 
   if (observerState.object) {
