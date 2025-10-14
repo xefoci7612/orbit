@@ -64,7 +64,7 @@ import { CelestialEventManager } from './events.js';
 import { init_debug, set_sunline_length, scene_axes } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
-export const VALIDATE = false; // Run validation script instead of normal visualization mode
+export const VALIDATE = false; // Dry-run validation instead of normal visualization mode
 
 const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
 const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
@@ -100,6 +100,13 @@ const fromUnits = u => u * KM_PER_UNIT;
 const toRadians = degrees => degrees * Math.PI / 180;
 const toDegrees = rad => rad * 180 / Math.PI;
 const HMSToRadians = s => s.split(/\s+/).reduce((acc, v, i) => acc + parseFloat(v) / [1, 60, 3600][i], 0) * (Math.PI / 12);
+
+// Helper to normalize an angle in radians to the [0, 2PI] range
+const normalizeRad = rad => {
+  let normalized = rad % (2 * Math.PI);
+  if (normalized < 0) { normalized += 2 * Math.PI; }
+  return normalized;
+};
 
 // Rescaled Sun distance for placing directional Sun light source
 const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
@@ -163,27 +170,40 @@ const EARTH_CHANGE_RATES = {
   L: toRadians(129597740.63 / 3600), // From arcsecs, rate for Mean Longitude (L)
 }
 
-// Target Body: Moon, Coordinate Center: Earth-Moon Barycenter [EMB]
-const MOON_J2000 = {
-  A: toUnits(379700),    // Semi-major axis in Km
- EC: 0.0554,             // Eccentricity
- IN: toRadians(5.145),   // Inclination to Ecliptic
- OM: toRadians(125.044), // Longitude of the Ascending Node (from VE)
-  W: toRadians(318.15),  // Argument of periapsis (from AN)
- MA: toRadians(134.963), // Mean anomaly
-};
+/*
+  The following polynomial expressions for the Moon's mean elements are based on
+  a simplified version of the ELP-2000/82B lunar theory.
 
-// Rate of Change (per Julian century)
-const MOON_CHANGE_RATES = {
-  A: 0,
- EC: 0,
- IN: 0,
- OM:-toRadians(100 * JULIAN_YEAR * 360 / MOON_NODE_PERIOD),    // clockwies (moves backwards)
-  W: toRadians(100 * JULIAN_YEAR * 360 / MOON_ABSIDAL_PERIOD), // counter-clockwise (moves forwards)
- MA: toRadians(100 * JULIAN_YEAR * 360 / MOON_ORBITAL_PERIOD), // counter-clockwise
+  Source: "Astronomical Algorithms" (2nd Edition) by Jean Meeus, Chapter 47.
+*/
+function propagateMoon(julianCenturies) {
 
- // const M = 134.96292 + 477198.86753 * T + 0.00924 * T * T;
+  const T = julianCenturies;
+
+  // Moon's Mean Longitude (L') in degrees
+  const L_prime = 218.3164477 + 481267.88123421 * T - 0.0015786 * T*T + T*T*T/538841 - T*T*T*T/65194000;
+
+  // Moon's Mean Anomaly (M')
+  const M_prime = 134.9633964 + 477198.8675055 * T + 0.0087414 * T*T + T*T*T/69699 - T*T*T*T/14712000;
+
+  // Moon's Argument of Latitude (F)
+  const F = 93.2720950 + 483202.0175233 * T - 0.0036539 * T*T - T*T*T/3526000 + T*T*T*T/863310000;
+
+  // Derive the required orbital elements from the fundamental arguments
+  const meanAnomalyDeg = M_prime;
+  const argumentOfPeriapsisDeg = F - M_prime;
+  const longAscendingNodeDeg = L_prime - F;
+
+  return {
+    A:  toUnits(379700),
+    EC: 0.0554,
+    IN: toRadians(5.145),
+    MA: normalizeRad(toRadians(meanAnomalyDeg)),
+    W:  normalizeRad(toRadians(argumentOfPeriapsisDeg)),
+    OM: normalizeRad(toRadians(longAscendingNodeDeg)),
+  };
 }
+
 
 /*
     Moon Ephemeris (osculating elements) from JPL Horizons
@@ -564,15 +584,13 @@ function exitObserverMode() {
 
 const tempVec = new THREE.Vector3();
 
-// Convert a position vector from world frame to the JPL Ecliptic J2000 frame
-// and from units values back to km
-function convertToJPL(position) {
-
-  const jpl_x =   position.x; // Matches directly
-  const jpl_y = - position.z; // Negate the Z component
-  const jpl_z =   position.y; // Y is the UP axis
-
-  return [fromUnits(jpl_x), fromUnits(jpl_y), fromUnits(jpl_z)];
+// Convert a position vector from the Scene's World Frame back to the
+// standard ICRS Ecliptic J2000 Frame and rescale from units to km.
+function convertToJPL(worldPosition) {
+  const x =   worldPosition.x; // x_icrs =  x_scene
+  const y = - worldPosition.z; // y_icrs = -z_scene
+  const z =   worldPosition.y; // z_icrs =  y_scene
+  return [fromUnits(x), fromUnits(y), fromUnits(z)];
 }
 
 // Convert an offset vector in world frame into a position in a
@@ -774,25 +792,18 @@ const toWorldQuat = new THREE.Quaternion();
 
 // Propagate source data at Epoch to current simulation time
 // according to known rotation speeds (change rates)
-function propagateOrbitalParameters(elapsedSeconds, data, changeRate) {
-
-  const T0 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000;
-  const timeSinceJ2000 = T0 + elapsedSeconds;
-
-  const julianCenturies = timeSinceJ2000 / (100 * JULIAN_YEAR);
-
+function propagateEarth(julianCenturies) {
   const current = {};
-  Object.keys(data).forEach(key => {
-    current[key] = data[key] + changeRate[key] * julianCenturies;
+  for (const key of Object.keys(EARTH_J2000)) {
+    const baseValue = EARTH_J2000[key];
+    current[key] = baseValue + EARTH_CHANGE_RATES[key] * julianCenturies;
 
     // The mean anomaly and other parameters can grow to a very large number.
     // It's good practice to normalize it to the 0-2PI range.
     if (key !== 'A' && key !== 'EC') {
-      let angle = current[key] % (2 * Math.PI);
-      if (angle < 0) { angle += 2 * Math.PI; }
-      current[key] = angle;
+      current[key] = normalizeRad(current[key]);
     }
-  });
+  };
 
   return current;
 }
@@ -808,10 +819,14 @@ function animate(simulation) {
   const elpasedMsec = simulation.clock.elapsed(); // in msecs
   const elapsedSeconds = elpasedMsec / 1000;
 
+  // Compute julian centuries elpased since J2000
+  const T0 = (MASTER_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000;
+  const T = (T0 + elapsedSeconds) / (100 * JULIAN_YEAR);
+
   // Propagate source data at Epoch to current simulation time
   // according to known rotation speeds (change rates)
-  const currentEarth = propagateOrbitalParameters(elapsedSeconds, EARTH_J2000, EARTH_CHANGE_RATES);
-  const currentMoon = propagateOrbitalParameters(elapsedSeconds, MOON_J2000, MOON_CHANGE_RATES);
+  const currentEarth = propagateEarth(T);
+  const currentMoon = propagateMoon(T);
 
   // Initial static rotations of the Sun orbital plane
   // Set the Euler rotation order to 'YXZ' to match the
@@ -913,8 +928,9 @@ function animate(simulation) {
     const e = tiltedEarth.getWorldPosition(earthPosWorldVec);
     const emb = embPivot.getWorldPosition(embPosWorldVec);
 
+    // Translate frame origin to EMB
     const em = m.clone().sub(emb); // EMB -> Moon (in world frame)
-    offsetToLocal(em, embPivot); // EMB -> Moon (in EMB frame)
+    //offsetToLocal(em, embPivot); // EMB -> Moon (in EMB frame)
 
     const moonV  = convertToJPL(em);
     const earthV = convertToJPL(e);
