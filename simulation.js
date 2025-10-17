@@ -4,7 +4,6 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
-    - Fix UP camera in observer view
 */
 
 

@@ -68,12 +68,11 @@ class CameraLock {
 
   targetCompensation() {
 
+    // Camera and target are always in World coordinates
     const camera = this.view.camera;
     const controls = this.view.controls;
     const stableCameraWorldPos = tempVec.copy(this.cameraLocalPos).clone();
-    const cameraUp = tempVec.set(0, 1, 0).clone(); // always to local Y-axis
     this.target.localToWorld(stableCameraWorldPos);
-    this.target.localToWorld(cameraUp);
 
     // P1: The CORRECT, stable camera position on the planet's surface.
     const P1 = stableCameraWorldPos;
@@ -130,7 +129,9 @@ class CameraLock {
     camera.position.copy(P1);
 
     // Up direction drifts with orbit, realign it
-    camera.up.copy(cameraUp);
+    const cameraUpWorld = tempVec.set(0, 1, 0); // Y-axis
+    cameraUpWorld.transformDirection(this.target.matrixWorld);
+    camera.up.copy(cameraUpWorld);
 
     // Update the controls' target to the new, compensated position.
     controls.target.copy(newTargetPosition);
@@ -360,10 +361,12 @@ class ViewManager {
     // Camera postion and target must be in world coordinates
     const cameraPosWorld = new THREE.Vector3(0, eyeHeight, 0);
     const targetPosWorld = new THREE.Vector3(0, 5 * eyeHeight, lookAhead);
-    const cameraUpWorld = new THREE.Vector3(0, 1, 0); // Y-axis
     marker.localToWorld(cameraPosWorld);
     marker.localToWorld(targetPosWorld);
-    marker.localToWorld(cameraUpWorld);
+
+    // Convert UP direction to world space (rotation only!)
+    const cameraUpWorld = new THREE.Vector3(0, 1, 0); // Y-axis
+    cameraUpWorld.transformDirection(marker.matrixWorld);
 
     const cameraConfig = {
         position: cameraPosWorld,
