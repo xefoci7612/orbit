@@ -4,6 +4,8 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
+    - Fix UP camera in observer view
+    - Save camera poositions in Earth local coordinates: orbit independent
 */
 
 
@@ -61,6 +63,7 @@
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
+import { Observer } from './observer.js';
 import { init_debug, set_sunline_length, scene_axes } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
@@ -341,77 +344,11 @@ const defaultCameraPos = (function() {
 // when we know Earth position
 const views = new ViewManager(scene, renderer, defaultCameraPos);
 
-
-// ============================================================================
-// OBSERVER VIEW MANAGEMENT
-// ============================================================================
+// Init Observer object
+const observer = new Observer(views);
 
 // List of objects that can have a locked view on them
 const trackableBodies = [earth, moon];
-
-// Tracks state for an observer on a planet
-const observerState = {
-    object: null,
-    marker:null, // in local coordinates
-    observerOnEarth: false,
-    viewIndex: null,
-    tempVec: new THREE.Vector3(),
-};
-
-// Helper used by observer and orbit locking
-function createMarker(radius, color) {
-  return new THREE.Mesh(
-    new THREE.SphereGeometry(radius),
-    new THREE.MeshBasicMaterial({ color })
-  );
-}
-
-// Release marker resources
-function disposeMarker(marker) {
-  marker.geometry.dispose();
-  marker.material.dispose();
-}
-
-// Add a child object, usually a marker, on a surface of
-// a body and align local coordinates of added child
-function attachToSurface(marker, object, surfacePoint) {
-
-  // Surface point must be in world coords
-  marker.position.copy(surfacePoint);
-  object.worldToLocal(marker.position);
-  orientToSurface(marker);
-  if (marker.parent !== object) // in case we just move the marker
-    object.add(marker);
-  marker.updateWorldMatrix(true, false);
-}
-
-// Orient the local coordinate frame of an object on the surface of a parent body
-function orientToSurface(marker) {
-  // Point on the surface must be in parent coordinates
-  const p = marker.position;
-
-  // Calculate Local Y-axis (outward normal from sphere)
-  const y_local = p.clone().normalize();
-
-  // Calculate Local X-axis as tangential velocity (z, 0, -x) for Y-axis rotation
-  const v = new THREE.Vector3(p.z, 0, -p.x);
-
-  // Detect special case of point exactly on the global Y-axis (pole) and
-  // fallback on parent X-axis
-  const onY = v.lengthSq() === 0;
-  const x_local = onY ? new THREE.Vector3(1, 0, 0) : v.normalize();
-
-  // Local Z-axis is cross product of x_local and y_local for right-handed system
-  const z_local = new THREE.Vector3().crossVectors(x_local, y_local);
-
-  // Rotation matrix whose columns are the local basis vectors (x_local, y_local, z_local)
-  // This matrix transforms from point's local frame to its parent's (sphere's) frame.
-  const rotationMatrix = new THREE.Matrix4();
-  rotationMatrix.makeBasis(x_local, y_local, z_local);
-
-  // Set point's quaternion from this rotation matrix
-  marker.quaternion.setFromRotationMatrix(rotationMatrix);
-}
 
 // Return any trackable object under mouse
 function pickObject(mouseX, mouseY) {
@@ -448,79 +385,6 @@ function lockToOrbit(objectToLock, surfacePoint) {
   // Lock the active view aligned to object's center
   views.lockToOrbitView(marker, objectToLock);
 }
-
-// Place an observer on an object surface
-function enterObserverMode(object, surfacePoint) {
-
-  // Currently we handle only one observer
-  console.assert(observerState.object === null, "Setting already existing observer");
-
-  // Position and orient the marker on the surface
-  const marker = createMarker(toUnits(10), 0xFFFFFF);
-  attachToSurface(marker, object, surfacePoint);
-
-  observerState.object = object;
-  observerState.marker = marker;
-
-  // Init observer events
-  observerState.observerOnEarth = (object === earth);
-
-  // Create a new observer view placed on marker
-  const eyeHeight = toUnits(5); // km above surface
-  const lookAhead = toUnits(100); // look at km ahead on horizon
-  const viewIndex = views.createObserverView(marker, eyeHeight, lookAhead);
-  observerState.viewIndex = viewIndex;
-
-  // Lock the view camera on the marker
-  const view = views.get(viewIndex);
-  view.lockTo(marker, true);
-
-  return viewIndex;
-}
-
-// Move the marker to a new position on planet surface
-function placeObserverAt(latDeg, lonDeg) {
-
-  const view = views.get(observerState.viewIndex);
-  if (views.getActive() !== view)
-    return;
-
-  const latRad = toRadians(latDeg);
-  const lonRad = toRadians(lonDeg);
-  const radius = observerState.marker.position.length();
-
-  // Convert spherical coordinates to Cartesian (x, y, z) in the planet's local
-  // frame. Y is the polar axis. +X is the prime meridian (0° longitude).
-  // The -z for sine is to match the longitude calculation in getGeoData.
-  const newSurfacePoint = new THREE.Vector3();
-  newSurfacePoint.y = radius * Math.sin(latRad);
-  const xzRadius = radius * Math.cos(latRad); // Radius of the circle at this latitude
-  newSurfacePoint.x = xzRadius * Math.cos(lonRad);
-  newSurfacePoint.z = -xzRadius * Math.sin(lonRad);
-
-  // Move the marker to new surface point and realign its plane
-  // Surface point must be in world coords
-  const object = observerState.object;
-  object.localToWorld(newSurfacePoint)
-  attachToSurface(observerState.marker, object, newSurfacePoint);
-
-  // Camera is already locked to the marker, locking update will
-  // set correct camera and target position at next frame.
-}
-
-// Drop observer view and release relative resources
-function exitObserverMode() {
-  const view = views.get(observerState.viewIndex);
-  view.unlock();
-  const marker = observerState.marker;
-  marker.parent.remove(marker);
-  disposeMarker(marker);
-  views.dispose(observerState.viewIndex);
-  observerState.object = null;
-  observerState.viewIndex = null;
-  observerState.marker = null;
-}
-
 
 // ============================================================================
 // CELESTIAL MECHANICS
@@ -653,16 +517,16 @@ function getMoonEBMPosition(current) {
 function heightAboveHorizon(target, radius) {
 
   // Get target's position in the observer frame
-  const temp = observerState.tempVec;
+  const temp = observer.tempVec;
   target.getWorldPosition(temp);
-  const targetLocalPos = observerState.marker.worldToLocal(temp);
+  const targetLocalPos = observer.marker.worldToLocal(temp);
 
   // Correction for the object's upper limb (its radius)
   const radiusCorrection = radius;
 
   // Correction for atmospheric refraction (lifts the image)
   let refractionCorrection = 0;
-  if (observerState.observerOnEarth) {
+  if (observer.object === earth) {
     const distance = targetLocalPos.length();
     refractionCorrection = distance * Math.tan(HORIZON_REFRACTION);
   }
@@ -896,7 +760,7 @@ function animate(simulation) {
     set_sunline_length(earthPosWorldVec);
   }
 
-  if (observerState.object) {
+  if (observer.object) {
     // In dry run mode sample the proper value and return
     if (simulation.dryRunFunction) {
         return simulation.dryRunFunction();
@@ -907,9 +771,9 @@ function animate(simulation) {
     simulation.eventManager.update(timeForward, sunDistance, tiltedMoon, sunLight);
 
     // If we are in observer view pass elevation and azimuth
-    const view = views.get(observerState.viewIndex);
+    const view = observer.getView();
     const isAct = (view == views.getActive());
-    const { azEl, latLon } = isAct ? view.getGeoData(observerState.marker) : { azEl: [], latLon: []};
+    const { azEl, latLon } = isAct ? view.getGeoData(observer.marker) : { azEl: [], latLon: []};
     Object.assign(simStepData, { azEl: azEl, latLon: latLon });
   }
 
@@ -966,10 +830,10 @@ class Simulation {
     this.findNextEvent = this.eventManager.findNextEvent.bind(this.eventManager);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
+    this.enterObserverView = observer.enterObserverView.bind(observer);
+    this.placeObserverAt = observer.placeAt.bind(observer);
+    this.exitObserverView = observer.exitObserverView.bind(observer);
     this.lockToOrbit = lockToOrbit;
-    this.enterObserverMode = enterObserverMode;
-    this.placeObserverAt = placeObserverAt;
-    this.exitObserverMode = exitObserverMode;
     this.pickObject = pickObject;
   }
   setDryRunFunction(idx) {
@@ -988,7 +852,7 @@ class Simulation {
     views.setDefault();
   }
   isObserverView() {
-    return views.getActive() === views.get(observerState.viewIndex);
+    return views.getActive() === observer.getView();
   }
   isOrbitLocked(object) {
     const lockedObjects = views.getOrbitLockedObjects();

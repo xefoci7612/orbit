@@ -114,7 +114,7 @@ class ObserverUI {
 
     // Place observer camera
     const slotIdx = parseInt(elem.observerCam.dataset.slot) - 1;
-    const viewIdx = simulation.enterObserverMode(hit.object, hit.point);
+    const viewIdx = simulation.enterObserverView(hit.object, hit.point);
     slots[slotIdx] = viewIdx;
     this.setState("active");
   };
@@ -146,7 +146,7 @@ class ObserverUI {
       document.body.classList.remove('observer-mode');
       elem.observerBtn.style.background = '';
       elem.observerCam.hidden = true;
-      simulation.exitObserverMode();
+      simulation.exitObserverView();
 
       // User clicked observer button while still looking for a place
       if (curState === "place") {
