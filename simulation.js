@@ -5,7 +5,6 @@
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
     - Fix UP camera in observer view
-    - Save camera poositions in Earth local coordinates: orbit independent
 */
 
 
@@ -340,9 +339,9 @@ const defaultCameraPos = (function() {
     cameraDistance * Math.cos(cameraElevation) * Math.cos(cameraAzimuth)
   );
 })();
-// Here we only instantiate the view maanger, we must init the main view later
+// Here we only instantiate the view mananger, we must init the main view later
 // when we know Earth position
-const views = new ViewManager(scene, renderer, defaultCameraPos);
+const views = new ViewManager(scene, renderer, defaultCameraPos, earth);
 
 // Init Observer object
 const observer = new Observer(views);

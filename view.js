@@ -84,7 +84,8 @@ class CameraLock {
     // T1: The current target (pivot point) of the OrbitControls.
     const T1 = controls.target;
 
-    if (P1.equals(P2)) return;
+    if (P1.equals(P2))
+      return;
 
     // ========================================================================
     // PART 1: Compute the user's intended rotation (`rotP1_P2`)
@@ -139,11 +140,12 @@ class CameraLock {
 };
 
 class View {
-  constructor(camera, controls) {
+  constructor(camera, controls, earthPosWorldVec) {
     this.camera = camera;
     this.controls = controls;
-    this.initialPosition = camera.position.clone();
-    this.initialTarget = controls.target.clone();
+    // Initial position and target are geocentric
+    this.initialPosition = camera.position.clone().sub(earthPosWorldVec);
+    this.initialTarget = controls.target.clone().sub(earthPosWorldVec);
     this.cameraLock = null;
   }
 
@@ -205,12 +207,13 @@ class View {
 };
 
 class ViewManager {
-  constructor(scene, renderer, defaultPosition) {
+  constructor(scene, renderer, defaultPosition, earth) {
     this.activeIdx = null;
     this.views = [];
     this.scene = scene;
     this.renderer = renderer;
     this.defaultPosition = defaultPosition; // relative to Earth
+    this.earth = earth;
   }
 
   init(earthPosWorldVec) {
@@ -246,6 +249,7 @@ class ViewManager {
     // orbitControls camera should always be in world coordinates
     this.scene.add(camera);
 
+    // Camera position and target must be in world coordinates
     const controls = new OrbitControls(camera, this.renderer.domElement);
     controls.target.copy(controlsConfig.target);
     camera.position.copy(cameraConfig.position);
@@ -259,7 +263,9 @@ class ViewManager {
     if (controlsConfig.minPolarAngle !== undefined) controls.minPolarAngle = controlsConfig.minPolarAngle;
     if (controlsConfig.maxPolarAngle !== undefined) controls.maxPolarAngle = controlsConfig.maxPolarAngle;
 
-    const view = new View(camera, controls);
+    const earthPosWorldVec = new THREE.Vector3();
+    this.earth.getWorldPosition(earthPosWorldVec);
+    const view = new View(camera, controls, earthPosWorldVec);
     const viewIndex = this.views.push(view) - 1;
     return viewIndex;
   }
@@ -288,6 +294,13 @@ class ViewManager {
     const newView = this.getActive();
     newView.camera.position.copy(newView.initialPosition);
     newView.controls.target.copy(newView.initialTarget);
+
+    // Initial positions are geocentric, convert to world coordinates
+    const earthPosWorldVec = new THREE.Vector3();
+    this.earth.getWorldPosition(earthPosWorldVec);
+    newView.camera.position.add(earthPosWorldVec);
+    newView.controls.target.add(earthPosWorldVec);
+
     newView.controls.enabled = true;
     newView.controls.update();
 
