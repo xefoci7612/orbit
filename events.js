@@ -1,83 +1,41 @@
 'use strict';
 
-// Physical properties (in kilometers, converted to scene units)
-const EARTH_RADIUS_KM = 6371; // Conventional radius for sphere approx.
-const MOON_RADIUS_KM = 1737.53;
-const SUN_RADIUS_KM = 695700;
-const MOON_DISTANCE_KM = 384400; // average
+// Define events and associated type/function
+const eventDefinitions = [
+  { name: 'sunrise',    type: 'sunRiseSet'  },
+  { name: 'sunset',     type: 'sunRiseSet'  },
+  { name: 'moonrise',   type: 'moonRiseSet' },
+  { name: 'moonset',    type: 'moonRiseSet' },
+  { name: 'suntransit', type: 'sunTransit'  }
+];
 
-// Scale conversions
-const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
-const toUnits = km => km / KM_PER_UNIT;
-
-// Rescaled Sun distance for placing directional Sun light source
-const SUN_LIGHT_DISTANCE = toUnits(10 * MOON_DISTANCE_KM);
-
-// Event types
+// These names is how UI html refers to a specific event
 export const CELESTIAL_EVENTS = {
-    RISE: 'rise',
-    SET: 'set',
-
-    names: ["sunrise", "sunset", "moonrise", "moonset"],
-    types: ["rise", "set", "rise", "set"],
+  event: "celestial_event",
+  names: eventDefinitions.map(def => def.name),
 };
-
-
-// Narrows down a time bracket using the regula falsi method and returns a [x1, x2]
-// high-precision bracket. The order is preserved, if start < end, then t1 < t2.
-function linearSolver(start, end, fStart, fEnd, fun, tolerance, maxIterations = 10) {
-  let x1 = start; // times in msec
-  let x2 = end;
-  let f1 = fStart;
-  let f2 = fEnd;
-
-  // Verify that the function has opposite signs at the endpoints
-  if (f1 * f2 > 0) {
-      throw new Error("Function must have opposite signs at start and end points");
-  }
-
-  for (let i = 0; i < maxIterations; i++) {
-
-      // Check if interval is smaller than tolerance
-      if (Math.abs(x2 - x1) < tolerance) {
-          return [x1, x2];
-      }
-
-      // Calculate the next guess using linear interpolation (regula falsi method)
-      const xNext = (x1 * f2 - x2 * f1) / (f2 - f1);
-      const fNext = fun(xNext);
-
-      // Check if we've found the root within tolerance
-      if (Math.abs(fNext) < tolerance) {
-          return [x1, x2];
-      }
-
-      // Update the interval based on the sign of fNext
-      if (f1 * fNext < 0) {
-          // Root is between x1 and xNext
-          x2 = xNext;
-          f2 = fNext;
-      } else {
-          // Root is between xNext and x2
-          x1 = xNext;
-          f1 = fNext;
-      }
-
-      if (i + 1 === maxIterations)
-        console.log("Max iterations reached in linearSolver");
-  }
-
-  // Return the best estimate after max iterations
-  return [x1, x2];
-}
 
 // Main class to handle celestial events functionality
 export class CelestialEventManager {
-  constructor(simulation, fun) {
+  constructor(simulation, eventFuns) {
     this.listeners = new Map();
     this.sim = simulation;
-    this.heightAboveHorizon = fun;
     this.prevState = {};
+
+    // The external in-context event detection functions: functions must be
+    // in same order as the types in eventDefinitions!
+    const keys = [...new Set(eventDefinitions.map(def => def.type))];
+    this.eventFunctions = Object.fromEntries(keys.map((k, i) => [k, eventFuns[i]]));
+
+    this.eventChecks = [
+      { target:  'sun', fun: this.checkRiseSetEvent.bind(this), type: 'sunRiseSet' },
+      { target: 'moon', fun: this.checkRiseSetEvent.bind(this), type: 'moonRiseSet'},
+      { target:  'sun', fun: this.checkTransitEvent.bind(this), type: 'sunTransit' },
+    ];
+  }
+
+  reset() {
+    this.prevState = {}; // stale events after observer changes
   }
 
   // Register a callback for a given event type
@@ -96,30 +54,40 @@ export class CelestialEventManager {
 
   // Check for visibility change, update internal state,
   // and return the event to emit
-  checkNewEvent(object, radius, item, timeForward) {
+  checkRiseSetEvent(type, timeForward) {
     // Call the external function that performs the actual
     // visibility check in context
-    const isVisible = this.heightAboveHorizon(object, radius) > 0;
+    const fun = this.eventFunctions[type];
+    const isVisible = fun() > 0;
     const atRise = (isVisible === timeForward);
-    const event = atRise ? CELESTIAL_EVENTS.RISE : CELESTIAL_EVENTS.SET;
-    const firstFrame = !this.prevState.hasOwnProperty(item);
-    const visibilityChanged = (!firstFrame && isVisible !== this.prevState[item]);
-    this.prevState[item] = isVisible;
+    const event = atRise ? 'rise' : 'set';
+    const firstFrame = !this.prevState.hasOwnProperty(type);
+    const visibilityChanged = (!firstFrame && isVisible !== this.prevState[type]);
+    this.prevState[type] = isVisible;
     return visibilityChanged ? event : null;
   }
 
-  // Emit event if visibility changed since last frame
-  update(timeForward, sunDistance, tiltedMoon, sunLight) {
-    // Calculate the equivalent radius using the captured real distance
-    const sunRadius = toUnits(SUN_RADIUS_KM) * (SUN_LIGHT_DISTANCE / sunDistance);
-    const moonRadius = toUnits(MOON_RADIUS_KM);
-    const eventM = this.checkNewEvent(tiltedMoon, moonRadius, "moonVisible", timeForward);
-    if (eventM !== null) {
-      this.emit(eventM, "Moon");
-    }
-    const eventS = this.checkNewEvent(sunLight, sunRadius, "sunVisible", timeForward);
-    if (eventS !== null) {
-      this.emit(eventS, "Sun");
+  // Check for transit event
+  // We should be careful because signedDistance is a tri-state [-1, 0, 1]
+  // in particular we risk double fire if signedDistance == 0, so check
+  // only for a strictly positive afterMeridian.
+  checkTransitEvent(type, timeForward) {
+    const fun = this.eventFunctions[type];
+    const signedDistance = fun();
+    const afterMeridian = (signedDistance > 0) === timeForward;
+    const firstFrame = !this.prevState.hasOwnProperty(type);
+    const signChanged = (!firstFrame && signedDistance * this.prevState[type] <= 0);
+    this.prevState[type] = signedDistance;
+    return signChanged && afterMeridian ? 'transit' : null;
+  }
+
+  // Emit new events since last frame
+  update(timeForward) {
+    for (const check of this.eventChecks) {
+      const eventType = check.fun(check.type, timeForward);
+      if (eventType !== null) {
+        this.emit(CELESTIAL_EVENTS.event, check.target + eventType);
+      }
     }
   }
 
@@ -128,6 +96,54 @@ export class CelestialEventManager {
     const currentDate = new Date(currentTimeMs);
     this.sim.setDate(currentDate); // Update sim clock, UI will read from it
     return this.sim.update();
+  }
+
+  // Narrows down a time bracket using the regula falsi method and returns a [x1, x2]
+  // high-precision bracket. The order is preserved, if start < end, then t1 < t2.
+  linearSolver(start, end, fStart, fEnd, tolerance, maxIterations = 10) {
+    let x1 = start; // times in msec
+    let x2 = end;
+    let f1 = fStart;
+    let f2 = fEnd;
+
+    // Verify that the function has opposite signs at the endpoints
+    if (f1 * f2 > 0) {
+        throw new Error("Function must have opposite signs at start and end points");
+    }
+
+    for (let i = 0; i < maxIterations; i++) {
+
+        // Check if interval is smaller than tolerance
+        if (Math.abs(x2 - x1) < tolerance) {
+            return [x1, x2];
+        }
+
+        // Calculate the next guess using linear interpolation (regula falsi method)
+        const xNext = (x1 * f2 - x2 * f1) / (f2 - f1);
+        const fNext = this.doSimStepAt(xNext);
+
+        // Check if we've found the root within tolerance
+        if (Math.abs(fNext) < tolerance) {
+            return [x1, x2];
+        }
+
+        // Update the interval based on the sign of fNext
+        if (f1 * fNext < 0) {
+            // Root is between x1 and xNext
+            x2 = xNext;
+            f2 = fNext;
+        } else {
+            // Root is between xNext and x2
+            x1 = xNext;
+            f1 = fNext;
+        }
+
+        if (i + 1 === maxIterations)
+          console.log("Max iterations reached in linearSolver");
+    }
+
+    // Return the best estimate after max iterations
+    return [x1, x2];
   }
 
   // Perform a fixed step search for a suitable range [x1, x2] that contains the
@@ -172,16 +188,19 @@ export class CelestialEventManager {
   // Find the next event in time direction starting from now.
   // Select a specific external function and use a linear solver
   // to find the zero, actually a very small range around zero
-  findNextEvent(event, forward) {
+  findNextEvent(eventName, forward) {
     // Set the external function that will be called in Simulation
     // loop to pick the specific value according to event type
-    const idx = CELESTIAL_EVENTS.names.indexOf(event);
-    this.sim.setDryRunFunction(idx);
+    const item = eventDefinitions.find(item => item.name === eventName);
+    const fun = this.eventFunctions[item.type];
+    this.sim.setDryRunFunction(fun);
 
     // Find a zero is not enough, we have to ensure the 'direction'
     // of the function, so to disambiguate between rise and set events
-    const isRise = CELESTIAL_EVENTS.types[idx] === "rise";
-    const first_sign = (isRise === forward ? -1 : 1); // Sign of range's first endpoint
+    // Transit value is always positive after transit (afternoon), and
+    // negative before (morning), so it behaves like rise.
+    const isRiseOrTransit = eventName.includes("rise") || eventName.includes("transit");
+    const first_sign = (isRiseOrTransit === forward ? -1 : 1); // Sign of range's first start point
 
     // Chose a proper time step for findBracket.
     // Step should be large enough for efficency but also smaller than the minimum
@@ -196,10 +215,10 @@ export class CelestialEventManager {
 
     // Find the zero of the function, that must be monotonic in [x1, x2], and return a
     // high-precision range [z1, z2] satisfying the condition (x1 < x2) == (z1 < z2)
-    const [z1, z2] = linearSolver(x1, x2, f1, f2, this.doSimStepAt.bind(this), tolerance);
+    const [z1, z2] = this.linearSolver(x1, x2, f1, f2, tolerance);
 
     this.sim.setDryRunFunction(null);
-    this.prevState = {}; // Reset stale states
+    this.reset(); // Reset stale states
     return forward ? z2 : z1; // Pick the timestamp _after_ the event
   }
 };

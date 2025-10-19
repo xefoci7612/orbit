@@ -4,6 +4,7 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
+    - Add sun transit and new moon events
 */
 
 
@@ -210,6 +211,14 @@ function propagateMoon(julianCenturies) {
   rotations
 */
 
+// Helper used by observer and orbit locking
+function createMarker(radius, color) {
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(radius),
+    new THREE.MeshBasicMaterial({ color })
+  );
+}
+
 // Helper to create a marker object
 function getMarker(color, position) {
   const geometry = new THREE.SphereGeometry(toUnits(600));
@@ -388,7 +397,9 @@ function lockToOrbit(objectToLock, surfacePoint) {
 // CELESTIAL MECHANICS
 // ============================================================================
 
-const tempVec = new THREE.Vector3();
+const temp1Vec = new THREE.Vector3();
+const temp2Vec = new THREE.Vector3();
+const temp3Vec = new THREE.Vector3();
 
 // Convert a position vector from the Scene's World Frame back to the
 // standard ICRS Ecliptic J2000 Frame and rescale from units to km.
@@ -402,10 +413,10 @@ function convertToJPL(worldPosition) {
 // Convert an offset vector in world frame into a position in a
 // local frame with a given origin
 function offsetToLocal(offset, origin) {
-  origin.getWorldPosition(tempVec);
-  tempVec.add(offset);
-  origin.worldToLocal(tempVec);
-  offset.copy(tempVec);
+  origin.getWorldPosition(temp1Vec);
+  temp1Vec.add(offset);
+  origin.worldToLocal(temp1Vec);
+  offset.copy(temp1Vec);
 }
 
 // Computes an array of 3D vertex on an elliptic curve in the Moon's absidal
@@ -765,8 +776,7 @@ function animate(simulation) {
     }
     // Update celestial events dependent on observer position
     const timeForward = (simulation.clock.speed() > 0);
-    const sunDistance = earthPosWorldVec.length();
-    simulation.eventManager.update(timeForward, sunDistance, tiltedMoon, sunLight);
+    simulation.eventManager.update(timeForward);
 
     // If we are in observer view pass elevation and azimuth
     const view = observer.getView();
@@ -801,6 +811,19 @@ function moonHeight() {
   return heightAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
 }
 
+function sunTransitDistance() {
+  temp1Vec.set(0, 1, 0); // Y axis
+  const earthPoleWorldVec = temp1Vec.transformDirection(earth.matrixWorld);
+  const obsPosWorldVec = observer.marker.getWorldPosition(temp2Vec);
+
+  // Determine if the observer (in world space) is on the noon-midnight plane
+  const noonMidnightPlaneNormal = temp3Vec
+      .crossVectors(earthPosWorldVec, earthPoleWorldVec)
+      .normalize();
+  const signedDistanceFormPlane = noonMidnightPlaneNormal.dot(obsPosWorldVec);
+  return signedDistanceFormPlane;
+}
+
 // ============================================================================
 // EXPORT CLASS
 // ============================================================================
@@ -810,13 +833,13 @@ class Simulation {
     // Don't render and return Moon / Earth positions
     this.validateMode = validateMode;
     this.dryRunFunction = null;
-    this.dryRunFunctions = [sunHeight, sunHeight, moonHeight, moonHeight];
+    const dryRunFunctions = [sunHeight, moonHeight, sunTransitDistance];
 
     // Our simulation clock, init with J2000 Epoch
     this.clock = new SimClock(J2000_EPOCH);
 
     // Create a new event manager and expose its 'on' method
-    this.eventManager = new CelestialEventManager(this, heightAboveHorizon);
+    this.eventManager = new CelestialEventManager(this, dryRunFunctions);
     this.on = this.eventManager.on.bind(this.eventManager);
 
     this.update = () => animate(this);
@@ -828,14 +851,14 @@ class Simulation {
     this.findNextEvent = this.eventManager.findNextEvent.bind(this.eventManager);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
-    this.enterObserverView = observer.enterObserverView.bind(observer);
-    this.placeObserverAt = observer.placeAt.bind(observer);
-    this.exitObserverView = observer.exitObserverView.bind(observer);
     this.lockToOrbit = lockToOrbit;
     this.pickObject = pickObject;
+    this.enterObserverView = (...a) => { this.eventManager.reset(); observer.enterObserverView(...a); };
+    this.placeObserverAt   = (...a) => { this.eventManager.reset(); observer.placeAt(...a); };
+    this.exitObserverView  = (...a) => { this.eventManager.reset(); observer.exitObserverView(...a); };
   }
-  setDryRunFunction(idx) {
-    this.dryRunFunction = (idx === null ? null : this.dryRunFunctions[idx]);
+  setDryRunFunction(fun) {
+    this.dryRunFunction = fun;
   }
   getRenderer() {
     return renderer;

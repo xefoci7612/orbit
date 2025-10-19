@@ -335,14 +335,14 @@ function getNextEvent(delta) {
 }
 
 elem.prevEvent.onclick = () => {
-  const event = elem.eventIndicator.classList[0];
-  simulation.findNextEvent(event, false);
+  const eventName = elem.eventIndicator.classList[0];
+  simulation.findNextEvent(eventName, false);
   updateDateTimeUI();
 };
 
 elem.nextEvent.onclick = () => {
-  const event = elem.eventIndicator.classList[0];
-  simulation.findNextEvent(event, true);
+  const eventName = elem.eventIndicator.classList[0];
+  simulation.findNextEvent(eventName, true);
   updateDateTimeUI();
 };
 
@@ -354,18 +354,8 @@ addEventListener('resize', () => {
   simulation.resize();
 });
 
-simulation.on(CELESTIAL_EVENTS.RISE, (name) => {
-  const event = name.toLowerCase() + "rise";
-  updateEventDisplay(event);
-  elem.eventGroup.hidden = false;
-  const inPause = (elem.btnPlay.textContent === '▶');
-  if (!inPause)
-    elem.btnPlay.onclick();
-});
-
-simulation.on(CELESTIAL_EVENTS.SET, (name) => {
-  const event = name.toLowerCase() + "set";
-  updateEventDisplay(event);
+simulation.on(CELESTIAL_EVENTS.event, (name) => {
+  updateEventDisplay(name);
   elem.eventGroup.hidden = false;
   const inPause = (elem.btnPlay.textContent === '▶');
   if (!inPause)
