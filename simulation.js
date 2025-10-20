@@ -881,7 +881,6 @@ class Simulation {
     this.speed = this.clock.speed.bind(this.clock);
     this.setSpeed = this.clock.setSpeed.bind(this.clock);
     this.togglePause = this.clock.togglePause.bind(this.clock);
-    this.findNextEvent = this.eventManager.findNextEvent.bind(this.eventManager);
     this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
@@ -902,14 +901,25 @@ class Simulation {
     this.clock.reset();
     views.setDefault();
   }
-  setDate(newDate) {
+  saveView() {
     // Save camera position to keep current view
     this.eventManager.reset();
     tiltedEarth.getWorldPosition(earthPosWorldVec);
     const view = views.getActive();
     view.setDefault(earthPosWorldVec);
+  }
+  setDate(newDate) {
+    // While in dry run we don't want to override any pending reset
+    if (!this.view_needs_reset) {
+      this.saveView();
+      this.view_needs_reset = true; // deferred to after simulation step
+    }
     this.clock.setDate(newDate);
+  }
+  findNextEvent(eventName, forward) {
+    this.saveView();
     this.view_needs_reset = true; // deferred to after simulation step
+    this.eventManager.findNextEvent(eventName, forward);
   }
   enterObserverView(object, surfaceWorldPoint) {
     const eyeHeight = toUnits(5); // km above surface

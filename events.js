@@ -223,8 +223,9 @@ export class CelestialEventManager {
     // high-precision range [z1, z2] satisfying the condition (x1 < x2) == (z1 < z2)
     const [z1, z2] = this.linearSolver(x1, x2, f1, f2, tolerance);
 
+    // Pick the timestamp _after_ the event
+    const zero = forward ? z2 : z1;
+    this.doSimStepAt(zero); // Sync the sim clock
     this.sim.setDryRunFunction(null);
-    this.reset(); // Reset stale states
-    return forward ? z2 : z1; // Pick the timestamp _after_ the event
   }
 };
