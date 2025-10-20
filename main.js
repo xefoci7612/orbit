@@ -336,13 +336,15 @@ function getNextEvent(delta) {
 
 elem.prevEvent.onclick = () => {
   const eventName = elem.eventIndicator.classList[0];
-  simulation.findNextEvent(eventName, false);
+  const timeForward = elem.btnReverse.textContent == '▻'; // speed can be 0
+  simulation.goToNextEvent(eventName, false, timeForward);
   updateDateTimeUI();
 };
 
 elem.nextEvent.onclick = () => {
   const eventName = elem.eventIndicator.classList[0];
-  simulation.findNextEvent(eventName, true);
+  const timeForward = elem.btnReverse.textContent == '▻'; // speed can be 0
+  simulation.goToNextEvent(eventName, true, timeForward);
   updateDateTimeUI();
 };
 

@@ -922,10 +922,10 @@ class Simulation {
     }
     this.clock.setDate(newDate);
   }
-  findNextEvent(eventName, forward) {
+  goToNextEvent(eventName, goNext, timeForward) {
     this.saveView();
     this.view_needs_reset = true; // deferred to after simulation step
-    this.eventManager.findNextEvent(eventName, forward);
+    this.eventManager.goToNextEvent(eventName, goNext, timeForward);
   }
   enterObserverView(object, surfaceWorldPoint) {
     const eyeHeight = toUnits(5); // km above surface

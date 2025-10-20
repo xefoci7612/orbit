@@ -192,10 +192,10 @@ export class CelestialEventManager {
     }
   }
 
-  // Find the next event in time direction starting from now.
-  // Select a specific external function and use a linear solver
-  // to find the zero, actually a very small range around zero
-  findNextEvent(eventName, forward) {
+  // Find and move to the next event in time direction starting from now.
+  // Select a specific external function and use a linear solver to find
+  // the zero, actually a very small range around zero
+  goToNextEvent(eventName, goNext, timeForward) {
     // Set the external function that will be called in Simulation
     // loop to pick the specific value according to event type
     const item = eventDefinitions.find(item => item.name === eventName);
@@ -206,13 +206,13 @@ export class CelestialEventManager {
     // of the function, so to disambiguate between rise and set events
     // Transit value is always positive after transit (afternoon), and
     // negative before (morning), so it behaves like rise.
-    const first_sign = (item.ascending === forward ? -1 : 1); // Sign of range's first start point
+    const first_sign = (item.ascending === goNext ? -1 : 1); // Sign of range's first start point
 
     // Chose a proper time step for findBracket.
     // Step should be large enough for efficency but also smaller than the minimum
     // interval between two consecutive (signed) zeros of the function.
     const period = (item.period * 24 * 3600 * 1000) * 0.75; // in msec
-    const step = (forward ? period : -period);
+    const step = (goNext ? period : -period);
 
     // Find initial [x1, x2] range
     const tolerance = 0.01;
@@ -223,8 +223,9 @@ export class CelestialEventManager {
     // high-precision range [z1, z2] satisfying the condition (x1 < x2) == (z1 < z2)
     const [z1, z2] = this.linearSolver(x1, x2, f1, f2, tolerance);
 
-    // Pick the timestamp _after_ the event
-    const zero = forward ? z2 : z1;
+    // Pick the timestamp _after_ the event according to the arrow of time,
+    // so that when play is pressed we don't have the same event again.
+    const zero = (goNext === timeForward ? z2 : z1);
     this.doSimStepAt(zero); // Sync the sim clock
     this.sim.setDryRunFunction(null);
   }
