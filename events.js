@@ -1,12 +1,14 @@
 'use strict';
 
 // Define events and associated type/function
+// period is in days, direction disambiguates between rise and set events
 const eventDefinitions = [
-  { name: 'sunrise',    type: 'sunRiseSet'  },
-  { name: 'sunset',     type: 'sunRiseSet'  },
-  { name: 'moonrise',   type: 'moonRiseSet' },
-  { name: 'moonset',    type: 'moonRiseSet' },
-  { name: 'suntransit', type: 'sunTransit'  }
+  { name: 'sunrise',    type: 'sunRiseSet', needObserver: true, period: 1, ascending: true },
+  { name: 'sunset',     type: 'sunRiseSet', needObserver: true, period: 1, ascending: false},
+  { name: 'moonrise',   type: 'moonRiseSet',needObserver: true, period: 1, ascending: true },
+  { name: 'moonset',    type: 'moonRiseSet',needObserver: true, period: 1, ascending: false},
+  { name: 'suntransit', type: 'sunTransit', needObserver: true, period: 1, ascending: true },
+  { name: 'moonnew',    type: 'newMoon',    needObserver:false, period:27, ascending: true },
 ];
 
 // These names is how UI html refers to a specific event
@@ -31,6 +33,7 @@ export class CelestialEventManager {
       { target:  'sun', fun: this.checkRiseSetEvent.bind(this), type: 'sunRiseSet' },
       { target: 'moon', fun: this.checkRiseSetEvent.bind(this), type: 'moonRiseSet'},
       { target:  'sun', fun: this.checkTransitEvent.bind(this), type: 'sunTransit' },
+      { target: 'moon', fun: this.checkTransitEvent.bind(this), type: 'newMoon'    },
     ];
   }
 
@@ -74,16 +77,20 @@ export class CelestialEventManager {
   checkTransitEvent(type, timeForward) {
     const fun = this.eventFunctions[type];
     const signedDistance = fun();
-    const afterMeridian = (signedDistance > 0) === timeForward;
+    const hasFullyCrossed = (signedDistance > 0) === timeForward;
+    const event = (type === 'newMoon' ? 'new' : 'transit');
     const firstFrame = !this.prevState.hasOwnProperty(type);
     const signChanged = (!firstFrame && signedDistance * this.prevState[type] <= 0);
     this.prevState[type] = signedDistance;
-    return signChanged && afterMeridian ? 'transit' : null;
+    return signChanged && hasFullyCrossed ? event : null;
   }
 
   // Emit new events since last frame
-  update(timeForward) {
+  update(timeForward, isObserver) {
     for (const check of this.eventChecks) {
+      const item = eventDefinitions.find(item => item.type === check.type);
+      if (!isObserver && item.needObserver)
+        continue;
       const eventType = check.fun(check.type, timeForward);
       if (eventType !== null) {
         this.emit(CELESTIAL_EVENTS.event, check.target + eventType);
@@ -199,14 +206,13 @@ export class CelestialEventManager {
     // of the function, so to disambiguate between rise and set events
     // Transit value is always positive after transit (afternoon), and
     // negative before (morning), so it behaves like rise.
-    const isRiseOrTransit = eventName.includes("rise") || eventName.includes("transit");
-    const first_sign = (isRiseOrTransit === forward ? -1 : 1); // Sign of range's first start point
+    const first_sign = (item.ascending === forward ? -1 : 1); // Sign of range's first start point
 
     // Chose a proper time step for findBracket.
     // Step should be large enough for efficency but also smaller than the minimum
     // interval between two consecutive (signed) zeros of the function.
-    const NINE_HOURS = 9 * 3600 * 1000; // in msec
-    const step = (forward ? NINE_HOURS : -NINE_HOURS);
+    const period = (item.period * 24 * 3600 * 1000) * 0.75; // in msec
+    const step = (forward ? period : -period);
 
     // Find initial [x1, x2] range
     const tolerance = 0.01;

@@ -4,7 +4,6 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
-    - Add sun transit and new moon events
 */
 
 
@@ -629,7 +628,7 @@ function propagateEarth(julianCenturies) {
 // Main animation loop
 function animate(simulation) {
 
-  // Our simulation output values, apart from rendering
+  // Our simulation output, apart from rendering
   const simStepData = { azEl: [], latLon: [] };
 
   // Three.js rotation order is 'XYZ' but astronomical standard defines
@@ -771,20 +770,23 @@ function animate(simulation) {
     set_sunline_length(earthPosWorldVec);
   }
 
-  if (observer.object) {
-    // In dry run mode sample the proper value and return
-    if (simulation.dryRunFunction) {
-        return simulation.dryRunFunction();
-    }
-    // Update celestial events dependent on observer position
-    const timeForward = (simulation.clock.speed() > 0);
-    simulation.eventManager.update(timeForward);
+  // In dry run mode sample the proper value and return
+  if (simulation.dryRunFunction) {
+      return simulation.dryRunFunction();
+  }
 
-    // If we are in observer view pass elevation and azimuth
+  // Update celestial events
+  const isObserver = (observer.object !== null);
+  const timeForward = (simulation.clock.speed() > 0);
+  simulation.eventManager.update(timeForward, isObserver);
+
+  // If we are in observer view pass elevation and azimuth
+  if (isObserver) {
     const view = observer.getView();
-    const isAct = (view == views.getActive());
-    const { azEl, latLon } = isAct ? view.getGeoData(observer.marker) : { azEl: [], latLon: []};
-    Object.assign(simStepData, { azEl: azEl, latLon: latLon });
+    if (view == views.getActive()) {
+      const { azEl, latLon } = view.getGeoData(observer.marker);
+      Object.assign(simStepData, { azEl: azEl, latLon: latLon });
+    }
   }
 
   // If is first frame init main view and other stuff that requires
@@ -813,17 +815,37 @@ function moonHeight() {
   return heightAboveHorizon(tiltedMoon, toUnits(MOON_RADIUS_KM));
 }
 
-function sunTransitDistance() {
-  temp1Vec.set(0, 1, 0); // Y axis
-  const earthPoleWorldVec = temp1Vec.transformDirection(earth.matrixWorld);
-  const obsPosWorldVec = observer.marker.getWorldPosition(temp2Vec);
+// Calculates the signed distance of a target object from a reference plane
+function signedDistanceToPlane(target, planeAxisObject) {
 
-  // Determine if the observer (in world space) is on the noon-midnight plane
-  const noonMidnightPlaneNormal = temp3Vec
-      .crossVectors(earthPosWorldVec, earthPoleWorldVec)
+  // Use the local Y-axis of the reference object as the defining axis
+  temp1Vec.set(0, 1, 0);
+  const planeYAxis = temp1Vec.transformDirection(planeAxisObject.matrixWorld);
+  const targetPosWorldVec = target.getWorldPosition(temp2Vec);
+
+  // The reference plane's normal is perpendicular to both the
+  // Sun-Earth vector and the defining axis
+  const planeNormal = temp3Vec
+      .crossVectors(earthPosWorldVec, planeYAxis)
       .normalize();
-  const signedDistanceFormPlane = noonMidnightPlaneNormal.dot(obsPosWorldVec);
+
+  // The dot product gives the perpendicular distance from the target to the plane
+  const signedDistanceFormPlane = planeNormal.dot(targetPosWorldVec);
   return signedDistanceFormPlane;
+}
+
+// Calculates the distance from the observer's local meridian.
+// A zero-crossing indicates a solar transit (noon or midnight).
+// The plane is defined by Earth's rotational axis
+function sunTransitDistance() {
+  return signedDistanceToPlane(observer.marker, earth);
+}
+
+// Calculates the distance of the Moon from the Sun-Earth line, as projected
+// onto the ecliptic plane. A zero-crossing indicates a syzygy (New or Full Moon).
+// The plane is defined by the ecliptic pole (the normal to Earth's orbital plane).
+function newMoonDistance() {
+  return signedDistanceToPlane(moon, earthOrbitalPlane);
 }
 
 // ============================================================================
@@ -835,7 +857,7 @@ class Simulation {
     // Don't render and return Moon / Earth positions
     this.validateMode = validateMode;
     this.dryRunFunction = null;
-    const dryRunFunctions = [sunHeight, moonHeight, sunTransitDistance];
+    const dryRunFunctions = [sunHeight, moonHeight, sunTransitDistance, newMoonDistance];
 
     // Our simulation clock, init with J2000 Epoch
     this.clock = new SimClock(J2000_EPOCH);
