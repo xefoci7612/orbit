@@ -3,25 +3,6 @@
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 
-// Scale conversions
-const EARTH_RADIUS_KM  = 6371;
-const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
-const toUnits = km => km / KM_PER_UNIT;
-
-// Helper used by observer and orbit locking
-function createMarker(radius, color) {
-  return new THREE.Mesh(
-    new THREE.SphereGeometry(radius),
-    new THREE.MeshBasicMaterial({ color })
-  );
-}
-
-// Release marker resources
-function disposeMarker(marker) {
-  marker.geometry.dispose();
-  marker.material.dispose();
-}
-
 // Orient the local coordinate frame of an object on the surface of
 // a parent body so that local XZ plane is tangent to surface with
 // X axis in the same direction of planet rotation (toward East)
@@ -54,19 +35,6 @@ function orientToSurface(marker) {
   // rotate the marker so that its local coordinate axes align with the
   // parent-space directions given by x_local, y_local, and z_local
   marker.quaternion.setFromRotationMatrix(rotationMatrix);
-}
-
-// Add a child object, usually a marker, on a surface of
-// a body and align local coordinates of added child
-function attachToSurface(marker, object, surfacePoint) {
-
-  // Surface point must be in world coords
-  marker.position.copy(surfacePoint);
-  object.worldToLocal(marker.position);
-  orientToSurface(marker);
-  // Add marker if we are not just translating it
-  if (marker.parent !== object)
-    object.add(marker);
   marker.updateWorldMatrix(true, false);
 }
 
@@ -75,7 +43,7 @@ export class Observer {
     constructor(views) {
         this.views = views;
         this.object = null;
-        this.marker =null; // in local coordinates
+        this.marker = null; // in local coordinates
         this.viewIndex = null;
         this.tempVec = new THREE.Vector3();
     }
@@ -84,22 +52,18 @@ export class Observer {
       return this.viewIndex !== null ? this.views.get(this.viewIndex) : null;
     }
 
-    // Place an observer on an object surface
-    enterObserverView(object, surfacePoint) {
+    // Set the oberver's local view
+    enterObserverView(object, marker, eyeHeight, lookAhead) {
 
       // Currently we handle only one observer
       console.assert(this.object === null, "Setting already existing observer");
 
-      // Position and orient the marker on the surface
-      const marker = createMarker(toUnits(10), 0xFFFFFF);
-      attachToSurface(marker, object, surfacePoint);
-
+      // Marker position should be already in local frame
+      orientToSurface(marker);
       this.object = object;
       this.marker = marker;
 
       // Create a new observer view placed on the marker
-      const eyeHeight = toUnits(5); // km above surface
-      const lookAhead = toUnits(100); // look at km ahead on horizon
       const viewIndex = this.views.createObserverView(marker, eyeHeight, lookAhead);
       this.viewIndex = viewIndex;
 
@@ -130,9 +94,9 @@ export class Observer {
       newSurfacePoint.z = -xzRadius * Math.sin(lonRad);
 
       // Move the marker to new surface point and realign its plane
-      // Surface point must be in world coords
-      this.object.localToWorld(newSurfacePoint)
-      attachToSurface(observerState.marker, this.object, newSurfacePoint);
+      // New marker's position must be in local coordinates
+      this.marker.position.copy(newSurfacePoint);
+      orientToSurface(this.marker);
 
       // Camera is already locked to the marker, locking update will
       // set correct camera and target position at next frame.
@@ -142,9 +106,6 @@ export class Observer {
     exitObserverView() {
       const view = this.getView();
       view.unlock();
-      const marker = this.marker;
-      marker.parent.remove(marker);
-      disposeMarker(marker);
       this.views.dispose(this.viewIndex);
       this.object = null;
       this.viewIndex = null;

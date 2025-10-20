@@ -112,7 +112,7 @@ class ObserverUI {
     if (!hit)
       return;
 
-    // Place observer camera
+    // Place observer camera, point is in world coordinates
     const slotIdx = parseInt(elem.observerCam.dataset.slot) - 1;
     const viewIdx = simulation.enterObserverView(hit.object, hit.point);
     slots[slotIdx] = viewIdx;

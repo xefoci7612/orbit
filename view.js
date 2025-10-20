@@ -15,7 +15,7 @@ const toDegrees = rad => rad * 180 / Math.PI;
 
 class CameraLock {
   constructor(marker, view, isFixedCamera) {
-    this.target = marker; // The object on the planet's surface the camera is attached to
+    this.marker = marker; // The object on the planet's surface the camera is attached to
     this.view = view;
     this.object = marker.parent;
     this.isFixedCamera = isFixedCamera;
@@ -23,16 +23,16 @@ class CameraLock {
     this.prevOrientation = new THREE.Quaternion();
     this.cameraLocalPos = new THREE.Vector3(); // stable with planet rotation
 
-    this.target.getWorldPosition(this.prevPosition);
-    this.target.getWorldQuaternion(this.prevOrientation);
+    this.marker.getWorldPosition(this.prevPosition);
+    this.marker.getWorldQuaternion(this.prevOrientation);
     this.cameraLocalPos.copy(this.view.camera.position);
-    this.target.worldToLocal(this.cameraLocalPos);
+    this.marker.worldToLocal(this.cameraLocalPos);
   }
 
   update() {
     // Camera position is always in world coords
-    const currentPos = this.target.getWorldPosition(tempVec);
-    const currentQuat = this.target.getWorldQuaternion(tempQuat);
+    const currentPos = this.marker.getWorldPosition(tempVec);
+    const currentQuat = this.marker.getWorldQuaternion(tempQuat);
 
     // Detect target movement since last frame
     const translationDelta = currentPos.clone().sub(this.prevPosition);
@@ -72,7 +72,7 @@ class CameraLock {
     const camera = this.view.camera;
     const controls = this.view.controls;
     const stableCameraWorldPos = tempVec.copy(this.cameraLocalPos).clone();
-    this.target.localToWorld(stableCameraWorldPos);
+    this.marker.localToWorld(stableCameraWorldPos);
 
     // P1: The CORRECT, stable camera position on the planet's surface.
     const P1 = stableCameraWorldPos;
@@ -130,7 +130,7 @@ class CameraLock {
 
     // Up direction drifts with orbit, realign it
     const cameraUpWorld = tempVec.set(0, 1, 0); // Y-axis
-    cameraUpWorld.transformDirection(this.target.matrixWorld);
+    cameraUpWorld.transformDirection(this.marker.matrixWorld);
     camera.up.copy(cameraUpWorld);
 
     // Update the controls' target to the new, compensated position.
@@ -153,6 +153,10 @@ class View {
   lockTo(marker, isFixedCamera) {
     // Set a lock on the view so that camera will follow the marker
     this.cameraLock = new CameraLock(marker, this, isFixedCamera);
+  }
+
+  getLockedObject() {
+    return this.cameraLock === null ? null : this.cameraLock.marker;
   }
 
   unlock() {
@@ -343,14 +347,14 @@ class ViewManager {
 
     // Set camera target on object center for better UX (user can still pan after)
     const temp = new THREE.Vector3();
-    const surfacePoint = marker.getWorldPosition(temp).clone();
-    const objCenter = objectToLock.getWorldPosition(temp).clone();
-    controls.target.copy(objCenter);
+    const surfaceWorldPoint = marker.getWorldPosition(temp).clone();
+    const objWorldCenter = objectToLock.getWorldPosition(temp).clone();
+    controls.target.copy(objWorldCenter);
 
     // Reposition camera along center-surface vector, same distance
-    const distanceToCenter = camera.position.distanceTo(objCenter);
-    const direction = temp.subVectors(surfacePoint, objCenter).normalize();
-    camera.position.copy(direction.multiplyScalar(distanceToCenter)).add(objCenter);
+    const distanceToCenter = camera.position.distanceTo(objWorldCenter);
+    const direction = temp.subVectors(surfaceWorldPoint, objWorldCenter).normalize();
+    camera.position.copy(direction.multiplyScalar(distanceToCenter)).add(objWorldCenter);
     controls.update();
     view.lockTo(marker, false);
   }

@@ -211,21 +211,23 @@ function propagateMoon(julianCenturies) {
   rotations
 */
 
-// Helper used by observer and orbit locking
-function createMarker(radius, color) {
-  return new THREE.Mesh(
-    new THREE.SphereGeometry(radius),
-    new THREE.MeshBasicMaterial({ color })
-  );
-}
+const temp1Vec = new THREE.Vector3();
+const temp2Vec = new THREE.Vector3();
+const temp3Vec = new THREE.Vector3();
 
-// Helper to create a marker object
-function getMarker(color, position) {
-  const geometry = new THREE.SphereGeometry(toUnits(600));
+// Create a marker object
+function getMarker(radius, color, position) {
+  const geometry = new THREE.SphereGeometry(radius);
   const material = new THREE.MeshBasicMaterial({ color: color });
   const marker = new THREE.Mesh(geometry, material);
-  marker.position.set(...position);
+  marker.position.copy(position);
   return marker;
+}
+
+// Release marker resources
+function disposeMarker(marker) {
+  marker.geometry.dispose();
+  marker.material.dispose();
 }
 
 // Create renderer and scene
@@ -328,8 +330,10 @@ function init_moon_path(current) {
   moonAbsidalOrbitalPlane.add(moonOrbitPath);
 
   // Add markers on the Moon's orbit ascending and descending nodes
-  moonNodesOrbitalPlane.add(getMarker(0xff00ff, [+rMoonAsc, 0, 0])); // Magenta
-  moonNodesOrbitalPlane.add(getMarker(0xffff00, [-rMoonDes, 0, 0])); // Yellow
+  temp1Vec.set(+rMoonAsc, 0, 0);
+  temp2Vec.set(-rMoonDes, 0, 0);
+  moonNodesOrbitalPlane.add(getMarker(toUnits(600), 0xff00ff, temp1Vec)); // Magenta
+  moonNodesOrbitalPlane.add(getMarker(toUnits(600), 0xffff00, temp2Vec)); // Yellow
 }
 
 // Add additional elements if debug is enabled
@@ -383,11 +387,12 @@ function pickObject(mouseX, mouseY) {
 }
 
 // Lock the camera into a geostationary orbit around the selected object
-function lockToOrbit(objectToLock, surfacePoint) {
+function lockToOrbit(objectToLock, surfaceWorldPoint) {
 
   // Set a marker in local coordinates on object's surface point
-  const marker = createMarker(toUnits(50), 0x00ff00);
-  attachToSurface(marker, objectToLock, surfacePoint);
+  const marker = getMarker(toUnits(50), 0x00ff00, surfaceWorldPoint);
+  objectToLock.worldToLocal(marker.position);
+  objectToLock.add(marker);
 
   // Lock the active view aligned to object's center
   views.lockToOrbitView(marker, objectToLock);
@@ -396,10 +401,6 @@ function lockToOrbit(objectToLock, surfacePoint) {
 // ============================================================================
 // CELESTIAL MECHANICS
 // ============================================================================
-
-const temp1Vec = new THREE.Vector3();
-const temp2Vec = new THREE.Vector3();
-const temp3Vec = new THREE.Vector3();
 
 // Convert a position vector from the Scene's World Frame back to the
 // standard ICRS Ecliptic J2000 Frame and rescale from units to km.
@@ -602,8 +603,6 @@ const SimClock = class {
   }
 };
 
-const simStepData = { azEl: [], latLon: [] };
-
 const earthPosWorldVec = new THREE.Vector3();
 const moonPosWorldVec = new THREE.Vector3();
 const embPosWorldVec = new THREE.Vector3();
@@ -629,6 +628,9 @@ function propagateEarth(julianCenturies) {
 
 // Main animation loop
 function animate(simulation) {
+
+  // Our simulation output values, apart from rendering
+  const simStepData = { azEl: [], latLon: [] };
 
   // Three.js rotation order is 'XYZ' but astronomical standard defines
   // the orientation of an orbital plane in a specific sequence:
@@ -853,9 +855,6 @@ class Simulation {
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
     this.pickObject = pickObject;
-    this.enterObserverView = (...a) => { this.eventManager.reset(); observer.enterObserverView(...a); };
-    this.placeObserverAt   = (...a) => { this.eventManager.reset(); observer.placeAt(...a); };
-    this.exitObserverView  = (...a) => { this.eventManager.reset(); observer.exitObserverView(...a); };
   }
   setDryRunFunction(fun) {
     this.dryRunFunction = fun;
@@ -872,6 +871,27 @@ class Simulation {
     this.clock.reset();
     views.setDefault();
   }
+  enterObserverView(object, surfaceWorldPoint) {
+    const eyeHeight = toUnits(5); // km above surface
+    const lookAhead = toUnits(100); // look at km ahead on horizon
+    this.eventManager.reset();
+    const marker = getMarker(toUnits(10), 0xFFFFFF, surfaceWorldPoint);
+    object.worldToLocal(marker.position);
+    object.add(marker);
+    const viewIndex = observer.enterObserverView(object, marker, eyeHeight, lookAhead);
+    return viewIndex;
+  }
+  placeObserverAt(latDeg, lonDeg) {
+    this.eventManager.reset();
+    observer.placeAt(latDeg, lonDeg);
+  }
+  exitObserverView() {
+    this.eventManager.reset();
+    const marker = observer.marker;
+    marker.removeFromParent();
+    disposeMarker(marker);
+    observer.exitObserverView();
+  }
   isObserverView() {
     return views.getActive() === observer.getView();
   }
@@ -881,8 +901,8 @@ class Simulation {
   }
   unlockCamera() {
     const view = views.getActive();
-    const marker = view.cameraLock.target;
-    marker.parent.remove(marker);
+    const marker = view.getLockedObject();
+    marker.removeFromParent();
     disposeMarker(marker);
     view.unlock();
   }
