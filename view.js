@@ -144,10 +144,19 @@ class View {
   constructor(camera, controls, earthPosWorldVec) {
     this.camera = camera;
     this.controls = controls;
-    // Initial position and target are geocentric
-    this.initialPosition = camera.position.clone().sub(earthPosWorldVec);
-    this.initialTarget = controls.target.clone().sub(earthPosWorldVec);
+    this.setDefault(earthPosWorldVec);
     this.cameraLock = null;
+  }
+
+  setDefault(earthPosWorldVec) {
+    // Default camera position and target are geocentric
+    this.defaultPosition = this.camera.position.clone().sub(earthPosWorldVec);
+    this.defaultTarget = this.controls.target.clone().sub(earthPosWorldVec);
+  }
+
+  reset(earthPosWorldVec) {
+    this.camera.position.copy(this.defaultPosition).add(earthPosWorldVec);
+    this.controls.target.copy(this.defaultTarget).add(earthPosWorldVec);
   }
 
   lockTo(marker, isFixedCamera) {
@@ -292,19 +301,14 @@ class ViewManager {
     if (curView) // Can be null at startup
       curView.controls.enabled = false;
 
-    // Switch to active view
+    // Switch to new active view
     this.activeIdx = viewIndex;
-
-    // Set new view default start position and update controls
     const newView = this.getActive();
-    newView.camera.position.copy(newView.initialPosition);
-    newView.controls.target.copy(newView.initialTarget);
 
     // Initial positions are geocentric, convert to world coordinates
     const earthPosWorldVec = new THREE.Vector3();
     this.earth.getWorldPosition(earthPosWorldVec);
-    newView.camera.position.add(earthPosWorldVec);
-    newView.controls.target.add(earthPosWorldVec);
+    newView.reset(earthPosWorldVec);
 
     newView.controls.enabled = true;
     newView.controls.update();

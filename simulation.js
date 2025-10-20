@@ -789,6 +789,13 @@ function animate(simulation) {
     }
   }
 
+  // One time event to reset camera view after a change of date
+  if (simulation.view_needs_reset) {
+    const view = views.getActive();
+    view.reset(earthPosWorldVec);
+    simulation.view_needs_reset = false;
+  }
+
   // If is first frame init main view and other stuff that requires
   // updated orbital parameters and Earth position
   if (views.getActive() === null) {
@@ -866,9 +873,11 @@ class Simulation {
     this.eventManager = new CelestialEventManager(this, dryRunFunctions);
     this.on = this.eventManager.on.bind(this.eventManager);
 
+    // A flag to handle deferred view update after date change
+    this.view_needs_reset = false;
+
     this.update = () => animate(this);
     this.getTime = this.clock.getTime.bind(this.clock);
-    this.setDate = this.clock.setDate.bind(this.clock);
     this.speed = this.clock.speed.bind(this.clock);
     this.setSpeed = this.clock.setSpeed.bind(this.clock);
     this.togglePause = this.clock.togglePause.bind(this.clock);
@@ -892,6 +901,15 @@ class Simulation {
   reset() {
     this.clock.reset();
     views.setDefault();
+  }
+  setDate(newDate) {
+    // Save camera position to keep current view
+    this.eventManager.reset();
+    tiltedEarth.getWorldPosition(earthPosWorldVec);
+    const view = views.getActive();
+    view.setDefault(earthPosWorldVec);
+    this.clock.setDate(newDate);
+    this.view_needs_reset = true; // deferred to after simulation step
   }
   enterObserverView(object, surfaceWorldPoint) {
     const eyeHeight = toUnits(5); // km above surface
