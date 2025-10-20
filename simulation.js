@@ -274,6 +274,12 @@ earthOrbitalPlane.add(embPivot);
 const moonNodesOrbitalPlane = new THREE.Object3D();
 scene.add(moonNodesOrbitalPlane);
 
+// Add markers on the Moon's orbit ascending and descending nodes
+const ascendingNodeMarker  = getMarker(toUnits(600), 0xff00ff, temp1Vec); // Magenta
+const descendingNodeMarker = getMarker(toUnits(600), 0xff00ff, temp1Vec); // Yellow
+moonNodesOrbitalPlane.add(ascendingNodeMarker);
+moonNodesOrbitalPlane.add(descendingNodeMarker);
+
 // The Moon absidal orbital plane
 // EMB is at the origin, same XZ plane as the nodes orbital plane,
 // local +X axis points toward periapsis / perigee
@@ -317,7 +323,7 @@ tiltedEarth.add(earth);
 function init_moon_path(current) {
   // An elliptical curve to show Moon's orbit, local +X axis points
   // toward periapsis / perigee
-  const [points, rMoonAsc, rMoonDes] = ellipticCurve(current);
+  const points = ellipticCurve(current);
   const vertexBuffer = new THREE.BufferAttribute(points, 3);
   const orbitPathGeo = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
   const orbitPathMat = new THREE.LineBasicMaterial({
@@ -327,12 +333,6 @@ function init_moon_path(current) {
   });
   const moonOrbitPath = new THREE.LineLoop(orbitPathGeo, orbitPathMat);
   moonAbsidalOrbitalPlane.add(moonOrbitPath);
-
-  // Add markers on the Moon's orbit ascending and descending nodes
-  temp1Vec.set(+rMoonAsc, 0, 0);
-  temp2Vec.set(-rMoonDes, 0, 0);
-  moonNodesOrbitalPlane.add(getMarker(toUnits(600), 0xff00ff, temp1Vec)); // Magenta
-  moonNodesOrbitalPlane.add(getMarker(toUnits(600), 0xffff00, temp2Vec)); // Yellow
 }
 
 // Add additional elements if debug is enabled
@@ -419,6 +419,11 @@ function offsetToLocal(offset, origin) {
   offset.copy(temp1Vec);
 }
 
+// Distance from focus given true anomaly (ellipse polar equation)
+function radius(ta, A, EC) {
+  return A * (1 - EC * EC) / (1 + EC * Math.cos(ta));
+}
+
 // Computes an array of 3D vertex on an elliptic curve in the Moon's absidal
 // XZ orbital plane, with origin at focus and +X axis pointing toward periapsis
 function ellipticCurve(current) {
@@ -426,25 +431,17 @@ function ellipticCurve(current) {
   const points = new Float32Array(SEGMENTS * 3);
   const A = current.A;
   const EC = current.EC;
-  const W = current.W;
-
-  // Distance from focus given true anomaly (ellipse polar equation)
-  const radius = ta => A * (1 - EC * EC) / (1 + EC * Math.cos(ta));
 
   // Loop starts at periapsis and moves in counter-clockwise direction
   // at i = 0 -> [r, 0, 0]
   for (let i = 0; i < SEGMENTS; i++) {
     const ta = (i / SEGMENTS) * 2 * Math.PI; // true anomaly
-    const r = radius(ta); // distance from focus at true anomaly
+    const r = radius(ta, A, EC); // distance from focus at true anomaly
     points[i*3 + 0] = r * Math.cos(ta); // x
     points[i*3 + 1] = 0;                // y  (on orbital plane)
     points[i*3 + 2] =-r * Math.sin(ta); //-z due to local frame conventions
   }
-
-  // Distances form origin of ascending and descending nodes
-  const rAsc = radius(-W);
-  const rDes = radius(-W + Math.PI);
-  return [points, rAsc, rDes];
+  return points;
 }
 
 // Solves Kepler's Equation for Eccentric Anomaly (E) with
@@ -681,6 +678,15 @@ function animate(simulation) {
   // only a transaltion, local frame axis directions do not change
   embPivot.getWorldPosition(embPosWorldVec);
   moonNodesOrbitalPlane.position.copy(embPosWorldVec);
+
+  // Ascending and descending nodes lie on the x-axis of the parent
+  // orbital plane of nodes and due to Moon's absidal precession
+  // their distance to Earth changes dynamically.
+  const ta = -currentMoon.W; // - argument of perigee by definition
+  const rMoonAsc = radius(ta, currentMoon.A, currentMoon.EC);
+  const rMoonDes = radius(ta + Math.PI, currentMoon.A, currentMoon.EC);
+  ascendingNodeMarker.position.set(rMoonAsc, 0, 0);
+  descendingNodeMarker.position.set(-rMoonDes, 0, 0);
 
   // Absidal precession in backwards (retrograde) direction
   moonAbsidalOrbitalPlane.rotation.y = currentMoon.W;
