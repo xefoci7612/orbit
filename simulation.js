@@ -62,7 +62,7 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
-import { init_debug, set_sunline_length, scene_axes } from './validate.js';
+import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Dry-run validation instead of normal visualization mode
@@ -166,6 +166,24 @@ const EARTH_CHANGE_RATES = {
   L: toRadians(129597740.63 / 3600), // From arcsecs, rate for Mean Longitude (L)
 }
 
+// Propagate Earth parameters since reference epoch. For earth update is
+// based on a fixed and very simple set of change rates.
+function propagateEarth(julianCenturies) {
+  const current = {};
+  for (const key of Object.keys(EARTH_J2000)) {
+    const baseValue = EARTH_J2000[key];
+    current[key] = baseValue + EARTH_CHANGE_RATES[key] * julianCenturies;
+
+    // The mean anomaly and other parameters can grow to a very large number.
+    // It's good practice to normalize it to the 0-2PI range.
+    if (key !== 'A' && key !== 'EC') {
+      current[key] = normalizeRad(current[key]);
+    }
+  };
+
+  return current;
+}
+
 /*
   The following polynomial expressions for the Moon's mean elements are based on
   a simplified version of the ELP-2000/82B lunar theory.
@@ -200,6 +218,69 @@ function propagateMoon(julianCenturies) {
   };
 }
 
+// Example: ISS Orbital Elements (Osculating, for a specific epoch)
+// Epoch: 2023-10-27 00:00:00 UTC
+const ISS_EPOCH = new Date('2023-10-27T00:00:00Z');
+const ISS_TIME = (ISS_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
+
+// Convert km to scene units
+const ISS_J2000 = {
+  A:  toUnits(EARTH_RADIUS_KM + 417), // Semi-major axis (km) -> units
+  EC: 0.0007,                        // Eccentricity
+  IN: toRadians(51.64),              // Inclination (deg) -> rad
+  MA: toRadians(130.5),              // Mean Anomaly (deg) -> rad
+  W:  toRadians(247.4),              // Argument of Perigee (deg) -> rad
+  OM: toRadians(325.0),              // RAAN (deg) -> rad
+  EPOCH: ISS_EPOCH
+};
+
+// Earth-specific constants for J₂ propagation
+const EARTH_MU = 398600.4418; // Standard gravitational parameter (km³/s²)
+const EARTH_J2 = 1.08262668e-3; // J₂ coefficient (dimensionless)
+
+// Use a J₂ Perturbation Propagator to update satellite position
+function propagateSatellite(initialElements, timeSinceEpoch) {
+
+  // a, e, and i are constant in this model
+  const current = {
+     A: initialElements.A,
+    EC: initialElements.EC,
+    IN: initialElements.IN,
+  };
+
+  const a  = fromUnits(initialElements.A); // Semi-major axis in km
+  const e  = initialElements.EC;           // Eccentricity
+  const i  = initialElements.IN;           // Inclination in radians
+  const M0 = initialElements.MA;           // Mean anomaly at epoch
+  const w0 = initialElements.W;            // Arg of Perigee at epoch
+  const O0 = initialElements.OM;           // RAAN at epoch
+
+  // Mean motion (n) in rad/sec
+  const n = Math.sqrt(EARTH_MU / Math.pow(a, 3));
+
+  // Semi-latus rectum (p) in km
+  const p = a * (1 - e * e);
+
+  // Pre-compute the J₂ perturbation factor for efficiency
+  const j2_factor = -(3 / 2) * n * EARTH_J2 * Math.pow(EARTH_RADIUS_KM / p, 2);
+
+  // Rate of change for RAAN (Ω̇)
+  const raan_dot = j2_factor * Math.cos(i);
+
+  // Rate of change for Argument of Perigee (ω̇)
+  const argp_dot = j2_factor * (2 - (5 / 2) * Math.sin(i) * Math.sin(i));
+
+  // Update RAAN
+  current.OM = normalizeRad(O0 + raan_dot * timeSinceEpoch);
+
+  // Update Argument of Perigee
+  current.W = normalizeRad(w0 + argp_dot * timeSinceEpoch);
+
+  // Update Mean Anomaly
+  current.MA = normalizeRad(M0 + n * timeSinceEpoch);
+
+  return current;
+}
 
 // ============================================================================
 // SCENE SETUP
@@ -213,6 +294,10 @@ function propagateMoon(julianCenturies) {
 const temp1Vec = new THREE.Vector3();
 const temp2Vec = new THREE.Vector3();
 const temp3Vec = new THREE.Vector3();
+const earthPosWorldVec = new THREE.Vector3();
+const moonPosWorldVec = new THREE.Vector3();
+const embPosWorldVec = new THREE.Vector3();
+const toWorldQuat = new THREE.Quaternion();
 
 // Create a marker object
 function getMarker(radius, color, position) {
@@ -227,6 +312,20 @@ function getMarker(radius, color, position) {
 function disposeMarker(marker) {
   marker.geometry.dispose();
   marker.material.dispose();
+}
+
+// Create an ellipses path line, local +X axis points toward periapsis
+function getOrbitPath(A, EC) {
+  const points = ellipticCurve(A, EC);
+  const vertexBuffer = new THREE.BufferAttribute(points, 3);
+  const orbitPathGeo = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
+  const orbitPathMat = new THREE.LineBasicMaterial({
+    color: 0x4488ff, // light blue
+    transparent: true,
+    opacity: 0.35
+  });
+  const orbitPath = new THREE.LineLoop(orbitPathGeo, orbitPathMat);
+  return orbitPath;
 }
 
 // Create renderer and scene
@@ -300,6 +399,13 @@ const moon = new THREE.Mesh(
 );
 tiltedMoon.add(moon);
 
+// An elliptical curve to show Moon's orbit, local +X axis points
+// toward periapsis / perigee
+// Semi axis major and eccentricity are assumed to be constant
+const moonEllipses = { A: toUnits(379700), EC: 0.0554 };
+const moonOrbitPath = getOrbitPath(moonEllipses.A, moonEllipses.EC);
+moonAbsidalOrbitalPlane.add(moonOrbitPath);
+
 
 // Earth hierarchy
 //
@@ -319,25 +425,32 @@ const earth = new THREE.Mesh(
 );
 tiltedEarth.add(earth);
 
-// Delayed init after inital orbital parameters have been updated
-function init_moon_path(current) {
-  // An elliptical curve to show Moon's orbit, local +X axis points
-  // toward periapsis / perigee
-  const points = ellipticCurve(current);
-  const vertexBuffer = new THREE.BufferAttribute(points, 3);
-  const orbitPathGeo = new THREE.BufferGeometry().setAttribute('position', vertexBuffer);
-  const orbitPathMat = new THREE.LineBasicMaterial({
-    color: 0x4488ff, // light blue
-    transparent: true,
-    opacity: 0.35
-  });
-  const moonOrbitPath = new THREE.LineLoop(orbitPathGeo, orbitPathMat);
-  moonAbsidalOrbitalPlane.add(moonOrbitPath);
-}
+// Satellite hierarchy
+//
+// The entire satellite system is parented to the Earth
+const satelliteNodesOrbitalPlane = new THREE.Object3D();
+tiltedEarth.add(satelliteNodesOrbitalPlane);
+
+const satelliteAbsidalOrbitalPlane = new THREE.Object3D();
+satelliteNodesOrbitalPlane.add(satelliteAbsidalOrbitalPlane);
+
+// The actual Satellite Mesh object
+const satellite = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(20), 8, 8), // A small sphere
+  new THREE.MeshBasicMaterial({ color: 0xff0000 }) // Red
+);
+satelliteAbsidalOrbitalPlane.add(satellite);
+
+// An elliptical curve to show satellite's orbit, local +X axis points
+// toward periapsis
+const satEllipses = { A: toUnits(EARTH_RADIUS_KM + 417), EC: 0.0007 };
+const satOrbitPath = getOrbitPath(satEllipses.A, satEllipses.EC);
+satelliteAbsidalOrbitalPlane.add(satOrbitPath);
+
 
 // Add additional elements if debug is enabled
 if (DEBUG)
-    init_debug(scene, tiltedEarth, earth);
+    init_debug(scene, tiltedEarth, earth, satellite);
 
 // Initial/default camera view
 const defaultCameraPos = (function() {
@@ -354,8 +467,11 @@ const defaultCameraPos = (function() {
 // when we know Earth position
 const views = new ViewManager(scene, renderer, defaultCameraPos, earth);
 
-// Init Observer object
-const observer = new Observer(views);
+// Init observer object
+const observer = new Observer(views, false);
+
+// Init satObserver object
+const satObserver = new Observer(views, true);
 
 // List of objects that can have a locked view on them
 const trackableBodies = [earth, moon];
@@ -426,11 +542,9 @@ function radius(ta, A, EC) {
 
 // Computes an array of 3D vertex on an elliptic curve in the Moon's absidal
 // XZ orbital plane, with origin at focus and +X axis pointing toward periapsis
-function ellipticCurve(current) {
+function ellipticCurve(A, EC) {
   const SEGMENTS = 360;
   const points = new Float32Array(SEGMENTS * 3);
-  const A = current.A;
-  const EC = current.EC;
 
   // Loop starts at periapsis and moves in counter-clockwise direction
   // at i = 0 -> [r, 0, 0]
@@ -519,13 +633,25 @@ function getMoonEBMPosition(current) {
   return [x, 0, z];
 }
 
+// Calculate the satellite position in its absidal orbital plane,
+// with +X axis pointing toward periapsis / perigee
+function getSatellitePosition(current) {
+
+  // Mean Anomaly is already updated
+  current.M = current.MA;
+
+  const [x, z] = solveAbsidalOrbit(current);
+
+  // Return 3D coordinates in the local plane's frame
+  return [x, 0, z];
+}
+
 // Return the height above visible horizon of a give target
 function heightAboveHorizon(target, radius) {
 
   // Get target's position in the observer frame
-  const temp = observer.tempVec;
-  target.getWorldPosition(temp);
-  const targetLocalPos = observer.marker.worldToLocal(temp);
+  target.getWorldPosition(temp1Vec);
+  const targetLocalPos = observer.marker.worldToLocal(temp1Vec);
 
   // Correction for the object's upper limb (its radius)
   const radiusCorrection = radius;
@@ -599,34 +725,11 @@ const SimClock = class {
   }
 };
 
-const earthPosWorldVec = new THREE.Vector3();
-const moonPosWorldVec = new THREE.Vector3();
-const embPosWorldVec = new THREE.Vector3();
-const toWorldQuat = new THREE.Quaternion();
-
-// Propagate Earth parameters since reference epoch. For earth update is
-// based on a fixed and very simple set of change rates.
-function propagateEarth(julianCenturies) {
-  const current = {};
-  for (const key of Object.keys(EARTH_J2000)) {
-    const baseValue = EARTH_J2000[key];
-    current[key] = baseValue + EARTH_CHANGE_RATES[key] * julianCenturies;
-
-    // The mean anomaly and other parameters can grow to a very large number.
-    // It's good practice to normalize it to the 0-2PI range.
-    if (key !== 'A' && key !== 'EC') {
-      current[key] = normalizeRad(current[key]);
-    }
-  };
-
-  return current;
-}
-
 // Main animation loop
 function animate(simulation) {
 
   // Our simulation output, apart from rendering
-  const simStepData = { azEl: [], latLon: [] };
+  let simStepData = { azEl: [], latLon: [] };
 
   // Three.js rotation order is 'XYZ' but astronomical standard defines
   // the orientation of an orbital plane in a specific sequence:
@@ -634,7 +737,7 @@ function animate(simulation) {
   // 2. Tilt around the Line of Nodes
 
   // Elapsed seconds and julian centuries since J2000 Epoch
-  const elpasedMsec = simulation.clock.elapsed(); // in msecs
+  const elpasedMsec = simulation.clock.elapsed();
   const elapsedSeconds = elpasedMsec / 1000;
   const julianCenturies = elapsedSeconds / (100 * JULIAN_YEAR);
 
@@ -675,7 +778,7 @@ function animate(simulation) {
   moonNodesOrbitalPlane.rotation.y = currentMoon.OM;
 
   // Set origin of Moon's nodes orbital plane onto EMB, this is
-  // only a transaltion, local frame axis directions do not change
+  // only a translation, local frame axis directions do not change
   embPivot.getWorldPosition(embPosWorldVec);
   moonNodesOrbitalPlane.position.copy(embPosWorldVec);
 
@@ -744,6 +847,21 @@ function animate(simulation) {
   offsetToLocal(earthPosWorldVec, embPivot);
   tiltedEarth.position.copy(earthPosWorldVec);
 
+  // Satellite placement
+  //
+  const timseSinceSatEpoch = elapsedSeconds - ISS_TIME; // in secs
+  const currentSatellite = propagateSatellite(ISS_J2000, timseSinceSatEpoch);
+
+  // Apply orientation to the satellite's orbital planes
+  satelliteNodesOrbitalPlane.rotation.order = 'YXZ';
+  satelliteNodesOrbitalPlane.rotation.x = currentSatellite.IN;
+  satelliteNodesOrbitalPlane.rotation.y = currentSatellite.OM;
+  satelliteAbsidalOrbitalPlane.rotation.y = currentSatellite.W;
+
+  // Compute Satellite position in its absidal plane
+  const [xs, ys, zs] = getSatellitePosition(currentSatellite);
+  satellite.position.set(xs, ys, zs);
+
   // Force hierarchy recalculation and recompute real positions before
   // second part of animation
   scene.updateWorldMatrix(true, true);
@@ -790,8 +908,7 @@ function animate(simulation) {
   if (isObserver) {
     const view = observer.getView();
     if (view == views.getActive()) {
-      const { azEl, latLon } = view.getGeoData(observer.marker);
-      Object.assign(simStepData, { azEl: azEl, latLon: latLon });
+      simStepData = observer.getGeoData();
     }
   }
 
@@ -806,7 +923,6 @@ function animate(simulation) {
   // updated orbital parameters and Earth position
   if (views.getActive() === null) {
     views.init(earthPosWorldVec);
-    init_moon_path(currentMoon);
   }
 
   // Update the active controls and render with the active camera
@@ -815,6 +931,10 @@ function animate(simulation) {
 
   return simStepData;
 }
+
+// ============================================================================
+// EVENT DETECTORS
+// ============================================================================
 
 // Functions used in dry run to sample the requested simulation values
 function sunHeight() {
@@ -831,7 +951,7 @@ function moonHeight() {
 // Calculates the signed distance of a target object from a reference plane
 function signedDistanceToPlane(target, planeAxisObject) {
 
-  // Use the local Y-axis of the reference object as the defining axis
+  // Use the local Y-axis of the object as the defining axis
   temp1Vec.set(0, 1, 0);
   const planeYAxis = temp1Vec.transformDirection(planeAxisObject.matrixWorld);
   const targetPosWorldVec = target.getWorldPosition(temp2Vec);
@@ -870,13 +990,13 @@ class Simulation {
     // Don't render and return Moon / Earth positions
     this.validateMode = validateMode;
     this.dryRunFunction = null;
-    const dryRunFunctions = [sunHeight, moonHeight, sunTransitDistance, newMoonDistance];
+    const eventFuns = [sunHeight, moonHeight, sunTransitDistance, newMoonDistance];
 
     // Our simulation clock, init with J2000 Epoch
     this.clock = new SimClock(J2000_EPOCH);
 
     // Create a new event manager and expose its 'on' method
-    this.eventManager = new CelestialEventManager(this, dryRunFunctions);
+    this.eventManager = new CelestialEventManager(this, eventFuns);
     this.on = this.eventManager.on.bind(this.eventManager);
 
     // A flag to handle deferred view update after date change
@@ -926,6 +1046,23 @@ class Simulation {
     this.saveView();
     this.view_needs_reset = true; // deferred to after simulation step
     this.eventManager.goToNextEvent(eventName, goNext, timeForward);
+  }
+  enterSatelliteView() {
+    const eyeHeight = toUnits(0);   // km above surface
+    const lookAhead = toUnits(100); // look at km ahead on horizon
+
+    // This is visually annoying
+    satOrbitPath.visible = false;
+
+    const viewIndex = satObserver.enterObserverView(earth, satellite, eyeHeight, lookAhead);
+    views.setActive(viewIndex);
+  }
+  exitSatelliteView() {
+    satObserver.exitObserverView();
+    satOrbitPath.visible = true;
+  }
+  isSatelliteView() {
+    return views.getActive() === satObserver.getView();
   }
   enterObserverView(object, surfaceWorldPoint) {
     const eyeHeight = toUnits(5); // km above surface

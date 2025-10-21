@@ -79,6 +79,7 @@ const elementIds = {
   linkIndicator: 'link-indicator',
   observerBtn: 'observer-btn',
   observerCam: 'observer-cam',
+  satelliteBtn: 'satellite-btn',
   loaderOverlay: 'loader-overlay',
   observerDataGroup: 'observer-data-group',
   azimuthOut: 'azimuth-out',
@@ -201,6 +202,9 @@ function camBtnReleased(slotIndex) {
       slots[slotIndex] = simulation.cloneView();
       this.classList.add('saved');
     } else {
+      if (simulation.isSatelliteView()) {
+        elem.satelliteBtn.onclick();
+      }
       simulation.setActiveView(viewIndex);
     }
   }
@@ -279,14 +283,14 @@ function updateSpeedUI() {
 
 function sceneDoubleClicked(mouseX, mouseY) {
   const hit = simulation.pickObject(mouseX, mouseY);
-  if (!hit)
+  if (!hit || simulation.isSatelliteView() || simulation.isObserverView())
     return;
 
   // Clicked again on the already locked object?
   if (simulation.isOrbitLocked(hit.object)) {
     simulation.unlockCamera();
     elem.linkIndicator.classList.remove('active');
-  } else if (!simulation.isObserverView()) {
+  } else {
     simulation.lockToOrbit(hit.object, hit.point);
     elem.linkIndicator.classList.add('active');
   }
@@ -302,6 +306,16 @@ elem.observerBtn.onclick = () => {
   if (newState === "idle") elem.eventGroup.hidden = true;
 };
 
+elem.satelliteBtn.onclick = () => {
+  if (!simulation.isSatelliteView()) {
+    simulation.enterSatelliteView();
+    elem.satelliteBtn.style.background = 'rgba(255,255,255,.5)';
+  } else {
+    simulation.exitSatelliteView();
+    elem.satelliteBtn.style.background = '';
+  }
+};
+
 elem.btnPlay.onclick = () => {
   const isPlay = simulation.togglePause();
   elem.btnPlay.textContent = isPlay ? '⏸' : '▶';
@@ -314,6 +328,9 @@ elem.btnReverse.onclick = () => {
 };
 
 elem.btnReset.onclick = () => {
+  if (simulation.isSatelliteView()) {
+    elem.satelliteBtn.onclick();
+  }
   simulation.reset();
   updateSpeedUI();
   updateDateTimeUI();

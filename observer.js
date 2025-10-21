@@ -3,30 +3,34 @@
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 
+// Helper to convert radians to degrees
+const toDegrees = rad => rad * 180 / Math.PI;
+
+const tempVec = new THREE.Vector3();
+
 // Orient the local coordinate frame of an object on the surface of
-// a parent body so that local XZ plane is tangent to surface with
-// X axis in the same direction of planet rotation (toward East)
+// a parent body so that local XZ plane is tangent to surface and
+// +X is the local meridian pointing North
 function orientToSurface(marker) {
   // Point on the surface must be in parent coordinates
   const p = marker.position;
 
-  // Calculate Local Y-axis (outward normal from sphere)
+  // Local UP is the outward normal from sphere
   const y_local = p.clone().normalize();
 
-  // Calculate Local X-axis as tangential velocity (z, 0, -x) for Y-axis rotation
-  // Here v⋅p = 0 for both p = Y axis and any radial vector (x, y, z)
-  const v = new THREE.Vector3(p.z, 0, -p.x);
+  // Calculate tangential velocity ω × p with ω = (0, 1, 0) for Y-axis
+  // rotation and p(x, y, z) --> (z, 0, -x)
+  const v_east = new THREE.Vector3(p.z, 0, -p.x);
 
   // Detect special case of point exactly on the global Y-axis (pole) and
   // fallback on parent X-axis
-  const onY = v.lengthSq() === 0;
-  const x_local = onY ? new THREE.Vector3(1, 0, 0) : v.normalize();
+  const onY = v_east.lengthSq() === 0;
+  const z_local = onY ? new THREE.Vector3(1, 0, 0) : v_east.normalize();
 
-  // Local Z-axis is cross product of x_local and y_local for right-handed system
-  const z_local = new THREE.Vector3().crossVectors(x_local, y_local);
+  // North is the cross product up X east vectors
+  const x_local = new THREE.Vector3().crossVectors(y_local, z_local);
 
-  // Rotation matrix whose columns are the local basis vectors (x_local, y_local, z_local)
-  // This matrix expresses the local coordinate axes in the parent (world) frame
+  // Rotation matrix expresses the local coordinate axes in the parent frame
   // and maps a point's local frame to its parent's frame: vworld​ = R ⋅ vlocal​
   const rotationMatrix = new THREE.Matrix4();
   rotationMatrix.makeBasis(x_local, y_local, z_local);
@@ -38,18 +42,86 @@ function orientToSurface(marker) {
   marker.updateWorldMatrix(true, false);
 }
 
-// Tracks state for an observer on a planet
+// Orient satellite local frame so camera (that by default
+// looks toward z-axis) will point "in the rear-view mirror"
+function orientSatellite(satellite, earth) {
+  const earthPosWorldVec = new THREE.Vector3();
+  earth.getWorldPosition(earthPosWorldVec);
+  // Rotates satellite so that its +Z axis points towards earth
+  satellite.lookAt(earthPosWorldVec);
+  // Now rotate to point to horizon 'behind'
+  const R = earth.geometry.parameters.radius;
+  const horizonAngle = Math.asin(R / satellite.position.length());
+  satellite.rotateY(horizonAngle);
+}
+
+// Calculates the Azimuth and Elevation of the views's current target point
+// and Latitude and Longitude of observer position.
+// The Az+ El are in the local reference frame of the marker object, instead
+// Lat + Lon are in geocentric coordinate system.
+function getGeoData(marker, targetWorldPos) {
+
+  const targetLocalPos = marker.worldToLocal(tempVec.copy(targetWorldPos));
+
+  // If the target is exactly at the observer's position, the direction is undefined.
+  if (targetLocalPos.lengthSq() === 0) {
+    return [];
+  }
+
+  // Elevation is the angle between the target vector and its projection on the XZ plane.
+  // We use asin(y / length).
+  const elevationRad = Math.asin(targetLocalPos.y / targetLocalPos.length());
+
+  // Azimuth is the angle in the XZ plane, measured _clockwise_ from North (+X).
+  // The standard function atan2(y, x) measures a counter-clockwise angle in the
+  // XY plane when viewed from the +Z axis.
+  // By using atan2(z, x), we are calculating the angle in the XZ plane. A standard
+  // right-hand rotation transforms the original +Z viewing axis to our -Y axis.
+  // This means the rotation is counter-clockwise when viewed from -Y.
+  // Therefore, when we view it from our standard +Y (top-down) direction, the rotation
+  // is perceived as CLOCKWISE, which is exactly what a navigational azimuth requires.
+  const x_to_z = Math.atan2(targetLocalPos.z, targetLocalPos.x);
+
+  // Normalize if the result is negative (target is in the "western" half of the circle)
+  const azimuthRad = x_to_z < 0 ? x_to_z + 2 * Math.PI : x_to_z;
+
+  // The marker's position is already in the local coordinate system of the
+  // parent object (the planet), which is our geocentric frame.
+  const observerLocalPos = marker.position;
+
+  // Latitude: The angle above or below the body's equatorial (XZ) plane.
+  // We use asin(y / length) to get the geocentric latitude.
+  const latitudeRad = Math.asin(observerLocalPos.y / observerLocalPos.length());
+
+  // Longitude: The angle around the polar (Y) axis in the equatorial plane.
+  // We assume the prime meridian (0° longitude) is along the parent's +X axis.
+  // Using atan2(z, x) gives a counter-clockwise angle from +X, matching the
+  // convention where East longitudes are positive and West are negative.
+  const longitudeRad = Math.atan2(observerLocalPos.z, observerLocalPos.x);
+
+  return {
+    azEl: [toDegrees(azimuthRad), toDegrees(elevationRad)],
+    latLon: [toDegrees(latitudeRad), toDegrees(longitudeRad)]
+  };
+}
+
+// Tracks state for an observer on a planet or on a satellite
 export class Observer {
-    constructor(views) {
+    constructor(views, onSatellite) {
         this.views = views;
         this.object = null;
         this.marker = null; // in local coordinates
         this.viewIndex = null;
-        this.tempVec = new THREE.Vector3();
+        this.onSatellite = onSatellite;
     }
 
     getView() {
       return this.viewIndex !== null ? this.views.get(this.viewIndex) : null;
+    }
+
+    getGeoData() {
+      const view = this.getView();
+      return getGeoData(this.marker, view.controls.target);
     }
 
     // Set the oberver's local view
@@ -59,7 +131,11 @@ export class Observer {
       console.assert(this.object === null, "Setting already existing observer");
 
       // Marker position should be already in local frame
-      orientToSurface(marker);
+      if (this.onSatellite){
+        orientSatellite(marker, object);
+      } else {
+        orientToSurface(marker);
+      }
       this.object = object;
       this.marker = marker;
 
@@ -69,7 +145,7 @@ export class Observer {
 
       // Lock the view camera on the marker
       const view = this.views.get(viewIndex);
-      view.lockTo(marker, true);
+      view.lockTo(marker, true, this.onSatellite);
       return viewIndex;
     }
 

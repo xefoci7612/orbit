@@ -10,15 +10,13 @@ import { OrbitControls } from 'orbitControls';
 const tempVec = new THREE.Vector3();
 const tempQuat = new THREE.Quaternion();
 
-// Helper to convert radians to degrees
-const toDegrees = rad => rad * 180 / Math.PI;
-
 class CameraLock {
-  constructor(marker, view, isFixedCamera) {
+  constructor(marker, view, isFixedCamera, onSatellite) {
     this.marker = marker; // The object on the planet's surface the camera is attached to
     this.view = view;
     this.object = marker.parent;
     this.isFixedCamera = isFixedCamera;
+    this.onSatellite = onSatellite;
     this.prevPosition = new THREE.Vector3();
     this.prevOrientation = new THREE.Quaternion();
     this.cameraLocalPos = new THREE.Vector3(); // stable with planet rotation
@@ -129,10 +127,11 @@ class CameraLock {
     camera.position.copy(P1);
 
     // Up direction drifts with orbit, realign it
-    const cameraUpWorld = tempVec.set(0, 1, 0); // Y-axis
-    cameraUpWorld.transformDirection(this.marker.matrixWorld);
-    camera.up.copy(cameraUpWorld);
-
+    if (!this.onSatellite) {
+      const cameraUpWorld = tempVec.set(0, 1, 0); // Y-axis
+      cameraUpWorld.transformDirection(this.marker.matrixWorld);
+      camera.up.copy(cameraUpWorld);
+    }
     // Update the controls' target to the new, compensated position.
     controls.target.copy(newTargetPosition);
 
@@ -159,9 +158,9 @@ class View {
     this.controls.target.copy(this.defaultTarget).add(earthPosWorldVec);
   }
 
-  lockTo(marker, isFixedCamera) {
+  lockTo(marker, isFixedCamera, onSatellite) {
     // Set a lock on the view so that camera will follow the marker
-    this.cameraLock = new CameraLock(marker, this, isFixedCamera);
+    this.cameraLock = new CameraLock(marker, this, isFixedCamera, onSatellite);
   }
 
   getLockedObject() {
@@ -170,53 +169,6 @@ class View {
 
   unlock() {
     this.cameraLock = null;
-  }
-
-  // Calculates the Azimuth and Elevation of the views's current target point
-  // and Latitude and Longitude of observer position.
-  // The Az+ El are in the local reference frame of the marker object, instead
-  // Lat + Lon are in geocentric coordinate system.
-  getGeoData(marker) {
-
-    const targetWorldPos = this.controls.target;
-    const targetLocalPos = marker.worldToLocal(tempVec.copy(targetWorldPos));
-
-    // If the target is exactly at the observer's position, the direction is undefined.
-    if (targetLocalPos.lengthSq() === 0) {
-      return [];
-    }
-
-    // Elevation is the angle between the target vector and its projection on the XZ plane.
-    // We use asin(y / length).
-    const elevationRad = Math.asin(targetLocalPos.y / targetLocalPos.length());
-
-    // Azimuth is the angle in the XZ plane.
-    // We use atan2(x, z) to get the angle from the +Z axis, growing in
-    // anticlockwise direction.
-    const azimuthRadMath = Math.atan2(targetLocalPos.x, targetLocalPos.z);
-
-    // Geographical Azimuth instead starts from the -Z axis (North),
-    // growing in a clockwise direction.
-    const azimuthRad = Math.PI - azimuthRadMath;
-
-    // The marker's position is already in the local coordinate system of the
-    // parent object (the planet), which is our geocentric frame.
-    const observerLocalPos = marker.position;
-
-    // Latitude: The angle above or below the body's equatorial (XZ) plane.
-    // We use asin(y / radius).
-    const latitudeRad = Math.asin(observerLocalPos.y / observerLocalPos.length());
-
-    // Longitude: The angle around the polar (Y) axis in the equatorial plane.
-    // We assume the prime meridian (0° longitude) is along the parent's +X axis.
-    // Using atan2(-z, x) gives a clockwise angle from +X, matching the convention
-    // where East longitudes are positive.
-    const longitudeRad = Math.atan2(-observerLocalPos.z, observerLocalPos.x);
-
-    return {
-      azEl: [toDegrees(azimuthRad), toDegrees(elevationRad)],
-      latLon: [toDegrees(latitudeRad), toDegrees(longitudeRad)]
-    };
   }
 };
 
@@ -363,12 +315,15 @@ class ViewManager {
     view.lockTo(marker, false);
   }
 
-  // Setup the camera view for a observer on a planet surface
+  // Setup the camera view for a observer on a planet surface,
+  // camera is set to look toward Z-axis direction
   createObserverView(marker, eyeHeight, lookAhead) {
 
-    // Camera postion and target must be in world coordinates
+    // Camera postion and target must be in world coordinates,
+    // Observer View has +X axis pointing to North, we point the
+    // camera toward South
     const cameraPosWorld = new THREE.Vector3(0, eyeHeight, 0);
-    const targetPosWorld = new THREE.Vector3(0, 5 * eyeHeight, lookAhead);
+    const targetPosWorld = new THREE.Vector3(-lookAhead, 5 * eyeHeight, 0);
     marker.localToWorld(cameraPosWorld);
     marker.localToWorld(targetPosWorld);
 
@@ -378,7 +333,7 @@ class ViewManager {
 
     const cameraConfig = {
         position: cameraPosWorld,
-        fov: 60,
+        fov: 120,
         up: cameraUpWorld,
         //rollAngle: Math.PI / 4
     };

@@ -102,7 +102,7 @@ const MOON_DISTANCE_KM = 384400;    // average
 const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
 const toUnits = km => km / KM_PER_UNIT;
 
-function addAxesHelper(object, size) {
+export function addAxesHelper(object, size) {
     const axesHelper = new THREE.AxesHelper(size);
     axesHelper.setColors(
       new THREE.Color(0xff0000), // Red
@@ -156,12 +156,13 @@ const sunLine = new THREE.Line(sunLineGeometry, sunLineMaterial);
 
 export let scene_axes = null;
 
-export function init_debug(scene, tiltedEarth, earth) {
+export function init_debug(scene, tiltedEarth, earth, satellite) {
   if (sunLine.parent !== scene) { // only once
     scene.add(sunLine); // in world coordinates
     earth.add(primeMeridianLine);
     addAxesHelper(tiltedEarth, toUnits(2 * EARTH_RADIUS_KM));
-    scene_axes = addAxesHelper(scene, toUnits(4 * EARTH_RADIUS_KM));
+    //scene_axes = addAxesHelper(scene, toUnits(4 * EARTH_RADIUS_KM));
+    addAxesHelper(satellite, toUnits(100));
   }
 }
 
