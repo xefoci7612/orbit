@@ -3,10 +3,16 @@
 import * as THREE from 'three';
 import { ViewManager } from './view.js';
 
-// Helper to convert radians to degrees
+const EARTH_RADIUS_KM  = 6371;
+const KM_PER_UNIT = EARTH_RADIUS_KM / 50; // Earth radius to units
+const fromUnits = u => u * KM_PER_UNIT;
 const toDegrees = rad => rad * 180 / Math.PI;
 
-const tempVec = new THREE.Vector3();
+// Standard gravitational parameter for Earth in km^3/s^2
+const MU_EARTH = 398600.4418;
+
+const temp1Vec = new THREE.Vector3();
+const temp2Vec = new THREE.Vector3();
 
 // Orient the local coordinate frame of an object on the surface of
 // a parent body so that local XZ plane is tangent to surface and
@@ -61,7 +67,7 @@ function orientSatellite(satellite, earth) {
 // Lat + Lon are in geocentric coordinate system.
 function getGeoData(marker, targetWorldPos) {
 
-  const targetLocalPos = marker.worldToLocal(tempVec.copy(targetWorldPos));
+  const targetLocalPos = marker.worldToLocal(temp1Vec.copy(targetWorldPos));
 
   // If the target is exactly at the observer's position, the direction is undefined.
   if (targetLocalPos.lengthSq() === 0) {
@@ -100,16 +106,92 @@ function getGeoData(marker, targetWorldPos) {
   const longitudeRad = Math.atan2(observerLocalPos.z, observerLocalPos.x);
 
   return {
-    azEl: [toDegrees(azimuthRad), toDegrees(elevationRad)],
-    latLon: [toDegrees(latitudeRad), toDegrees(longitudeRad)]
+    azimuth:   toDegrees(azimuthRad),
+    elevation: toDegrees(elevationRad),
+    latitude:  toDegrees(latitudeRad),
+    longitude: toDegrees(longitudeRad),
   };
+}
+
+let nadirMarker = null;
+let prevElapsed = 0;
+const prevNadirLocalPos = new THREE.Vector3();
+let prevGroundSpeed = 0;
+let prevInertialSpeed = 0;
+let prevHeight = 0;
+
+// Satellite position must be in Earth local frame
+function placeAtNadir(nadirMarker, radius, curSatPos) {
+  const nadirPos = temp1Vec.copy(curSatPos).normalize().multiplyScalar(radius);
+  nadirMarker.position.copy(nadirPos);
+  return nadirMarker.position;
+}
+
+// Calculates satellite ground speed and other surface data
+function getSatData(satellite, earth, elapsed) {
+
+  const earthRadius = earth.geometry.parameters.radius;
+  const curSatPos = satellite.position;
+
+  // Marker on the ground used for ground speed
+  if (!nadirMarker) {
+      nadirMarker = new THREE.Object3D();
+      earth.add(nadirMarker);
+      const curPos = placeAtNadir(nadirMarker, earthRadius, curSatPos);
+      prevNadirLocalPos.copy(curPos);
+      prevElapsed = elapsed;
+      return null;
+  }
+
+  // We can move in both time directions
+  const deltaTime = Math.abs(elapsed - prevElapsed);
+  if (deltaTime === 0) { // paused
+    return {
+      height: prevHeight,
+      inertialSpeed: prevInertialSpeed,
+      groundSpeed: prevGroundSpeed,
+    }
+  }
+
+  // Compute orbital speed by Vis-viva equation
+  const r_km = fromUnits(curSatPos.length()); // in km
+  const a_km = EARTH_RADIUS_KM + 417; // FIXME do not hardcode
+  const speed_km_per_s_squared = MU_EARTH * ((2 / r_km) - (1 / a_km));
+  const speed_km_per_s = Math.sqrt(speed_km_per_s_squared);
+  const inertialSpeed = Math.floor(speed_km_per_s * 3600);
+
+  // Place nadir marker to new current position
+  const curNadirPos = placeAtNadir(nadirMarker, earthRadius, curSatPos);
+
+  // Get the angle between the previous and current nadir position vectors.
+  const angle = prevNadirLocalPos.angleTo(curNadirPos);
+
+  // The distance is the arc length: s = r * θ
+  const groundDistance = fromUnits(earthRadius) * angle;
+  const groundSpeed = Math.floor(3600 * groundDistance / deltaTime); // km/h
+
+  // Compute height above the ground
+  const heightVec = temp1Vec.copy(curSatPos).sub(curNadirPos);
+  const height = Math.floor(fromUnits(heightVec.length()));
+
+  prevElapsed = elapsed;
+  prevNadirLocalPos.copy(curNadirPos);
+  prevGroundSpeed = groundSpeed;
+  prevInertialSpeed = inertialSpeed;
+  prevHeight = height;
+
+  return {
+    height: height,
+    inertialSpeed: inertialSpeed,
+    groundSpeed: groundSpeed,
+   };
 }
 
 // Tracks state for an observer on a planet or on a satellite
 export class Observer {
     constructor(views, onSatellite) {
         this.views = views;
-        this.object = null;
+        this.object = null; // usually Earth
         this.marker = null; // in local coordinates
         this.viewIndex = null;
         this.onSatellite = onSatellite;
@@ -124,8 +206,14 @@ export class Observer {
       return getGeoData(this.marker, view.controls.target);
     }
 
+    getSatData(elapsedSeconds) {
+      if (this.object === null)
+        return null;
+      return getSatData(this.marker, this.object, elapsedSeconds);
+    }
+
     // Set the oberver's local view
-    enterObserverView(object, marker, eyeHeight, lookAhead) {
+    createObserverView(object, marker, eyeHeight, lookAhead) {
 
       // Currently we handle only one observer
       console.assert(this.object === null, "Setting already existing observer");
@@ -140,7 +228,8 @@ export class Observer {
       this.marker = marker;
 
       // Create a new observer view placed on the marker
-      const viewIndex = this.views.createObserverView(marker, eyeHeight, lookAhead);
+      const fov = this.onSatellite ? 90 : 120;
+      const viewIndex = this.views.createObserverView(marker, eyeHeight, lookAhead, fov);
       this.viewIndex = viewIndex;
 
       // Lock the view camera on the marker
@@ -179,7 +268,7 @@ export class Observer {
     }
 
     // Drop observer view and release relative resources
-    exitObserverView() {
+    disposeObserverView() {
       const view = this.getView();
       view.unlock();
       this.views.dispose(this.viewIndex);

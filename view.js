@@ -317,7 +317,7 @@ class ViewManager {
 
   // Setup the camera view for a observer on a planet surface,
   // camera is set to look toward Z-axis direction
-  createObserverView(marker, eyeHeight, lookAhead) {
+  createObserverView(marker, eyeHeight, lookAhead, fov) {
 
     // Camera postion and target must be in world coordinates,
     // Observer View has +X axis pointing to North, we point the
@@ -333,7 +333,7 @@ class ViewManager {
 
     const cameraConfig = {
         position: cameraPosWorld,
-        fov: 120,
+        fov: fov,
         up: cameraUpWorld,
         //rollAngle: Math.PI / 4
     };

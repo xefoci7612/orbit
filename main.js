@@ -86,6 +86,10 @@ const elementIds = {
   elevationOut: 'elevation-out',
   latitudeOut: 'latitude-out',
   longitudeOut: 'longitude-out',
+  satDataGroup: 'sat-data-group',
+  satGrnSpeedOut: 'sat-grn-speed-out',
+  satHeightOut: 'sat-height-out',
+  satIneSpeedOut: 'sat-ine-speed-out',
   eventGroup: 'event-group',
   prevEvent: 'prev-event',
   eventIndicator: 'event-indicator',
@@ -115,7 +119,7 @@ class ObserverUI {
 
     // Place observer camera, point is in world coordinates
     const slotIdx = parseInt(elem.observerCam.dataset.slot) - 1;
-    const viewIdx = simulation.enterObserverView(hit.object, hit.point);
+    const viewIdx = simulation.createObserverView(hit.object, hit.point);
     slots[slotIdx] = viewIdx;
     this.setState("active");
   };
@@ -147,7 +151,7 @@ class ObserverUI {
       document.body.classList.remove('observer-mode');
       elem.observerBtn.style.background = '';
       elem.observerCam.hidden = true;
-      simulation.exitObserverView();
+      simulation.disposeObserverView();
 
       // User clicked observer button while still looking for a place
       if (curState === "place") {
@@ -384,23 +388,31 @@ simulation.on(CELESTIAL_EVENTS.event, (name) => {
 function animationLoop() {
 
   // Perform a simulation step and render
-  const events = simulation.update();
+  const simData = simulation.update();
 
-  // If we are in observer view show/set coordinates
-  if (events.azEl.length > 0) {
-    elem.observerDataGroup.hidden = false;
-    elem.azimuthOut.textContent = formatDegrees(events.azEl[0]);
-    elem.elevationOut.textContent = formatDegrees(events.azEl[1]);
+  elem.observerDataGroup.hidden = true;
+  elem.satDataGroup.hidden = true;
 
-    // Only update the UI if the user is NOT currently editing the fields
-    const isEditingLat = elem.latitudeOut.getAttribute( 'data-manual-edit') === 'true';
-    const isEditingLon = elem.longitudeOut.getAttribute('data-manual-edit') === 'true';
-    if (!isEditingLat && !isEditingLon) {
-      elem.latitudeOut.value  = toDMS(events.latLon[0], true);
-      elem.longitudeOut.value = toDMS(events.latLon[1], false);
+  // If we are in observer/satellite view update dynamic info
+  if (simData !== null) {
+    if (simulation.isObserverView()) {
+      elem.observerDataGroup.hidden = false;
+      elem.azimuthOut.textContent = formatDegrees(simData.azimuth);
+      elem.elevationOut.textContent = formatDegrees(simData.elevation);
+
+      // Only update the UI if the user is NOT currently editing the fields
+      const isEditingLat = elem.latitudeOut.getAttribute( 'data-manual-edit') === 'true';
+      const isEditingLon = elem.longitudeOut.getAttribute('data-manual-edit') === 'true';
+      if (!isEditingLat && !isEditingLon) {
+        elem.latitudeOut.value  = toDMS(simData.latitude, true);
+        elem.longitudeOut.value = toDMS(simData.longitude, false);
+      }
+    } else if (simulation.isSatelliteView()) {
+      elem.satDataGroup.hidden = false;
+      elem.satHeightOut.textContent   = `${simData.height} Km`;
+      elem.satGrnSpeedOut.textContent = `${simData.groundSpeed} Km/h`;
+      elem.satIneSpeedOut.textContent = `${simData.inertialSpeed} Km/h`;
     }
-  } else {
-    elem.observerDataGroup.hidden = true;
   }
 
   // Sync UI elements to new state

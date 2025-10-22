@@ -435,8 +435,10 @@ const satelliteAbsidalOrbitalPlane = new THREE.Object3D();
 satelliteNodesOrbitalPlane.add(satelliteAbsidalOrbitalPlane);
 
 // The actual Satellite Mesh object
+const SAT_VISIBILITY_SCALE = 20; // in km
+const SAT_REALISTIC_SCALE = 2 / SAT_VISIBILITY_SCALE;
 const satellite = new THREE.Mesh(
-  new THREE.SphereGeometry(toUnits(20), 8, 8), // A small sphere
+  new THREE.SphereGeometry(toUnits(SAT_VISIBILITY_SCALE), 8, 8),
   new THREE.MeshBasicMaterial({ color: 0xff0000 }) // Red
 );
 satelliteAbsidalOrbitalPlane.add(satellite);
@@ -729,7 +731,7 @@ const SimClock = class {
 function animate(simulation) {
 
   // Our simulation output, apart from rendering
-  let simStepData = { azEl: [], latLon: [] };
+  let simStepData = null;
 
   // Three.js rotation order is 'XYZ' but astronomical standard defines
   // the orientation of an orbital plane in a specific sequence:
@@ -904,12 +906,12 @@ function animate(simulation) {
   const timeForward = (simulation.clock.speed() > 0);
   simulation.eventManager.update(timeForward, isObserver);
 
-  // If we are in observer view pass elevation and azimuth
-  if (isObserver) {
-    const view = observer.getView();
-    if (view == views.getActive()) {
-      simStepData = observer.getGeoData();
-    }
+  // If we are in observer or satellite view get
+  // specific data
+  if (simulation.isObserverView()) {
+    simStepData = observer.getGeoData()
+  } else if (simulation.isSatelliteView()) {
+    simStepData = satObserver.getSatData(elapsedSeconds);
   }
 
   // One time event to reset camera view after a change of date
@@ -1007,7 +1009,6 @@ class Simulation {
     this.speed = this.clock.speed.bind(this.clock);
     this.setSpeed = this.clock.setSpeed.bind(this.clock);
     this.togglePause = this.clock.togglePause.bind(this.clock);
-    this.setActiveView = views.setActive.bind(views);
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
     this.pickObject = pickObject;
@@ -1047,46 +1048,53 @@ class Simulation {
     this.view_needs_reset = true; // deferred to after simulation step
     this.eventManager.goToNextEvent(eventName, goNext, timeForward);
   }
+  setActiveView(viewIndex) {
+    views.setActive(viewIndex);
+    // Hide orbit path clutter and set realistic scale for satellite
+    const isLocalView = this.isSatelliteView() || this.isObserverView();
+    satOrbitPath.visible = !isLocalView;
+    const scale = isLocalView ? SAT_REALISTIC_SCALE : 1.0;
+    satellite.scale.set(scale, scale, scale);
+  }
   enterSatelliteView() {
     const eyeHeight = toUnits(0);   // km above surface
     const lookAhead = toUnits(100); // look at km ahead on horizon
 
-    // This is visually annoying
-    satOrbitPath.visible = false;
-
-    const viewIndex = satObserver.enterObserverView(earth, satellite, eyeHeight, lookAhead);
-    views.setActive(viewIndex);
+    const viewIndex = satObserver.createObserverView(earth, satellite, eyeHeight, lookAhead);
+    this.setActiveView(viewIndex);
   }
   exitSatelliteView() {
-    satObserver.exitObserverView();
-    satOrbitPath.visible = true;
+    // FIXME actively change view to last one before dispose
+    satObserver.disposeObserverView();
   }
   isSatelliteView() {
-    return views.getActive() === satObserver.getView();
+    const view = views.getActive();
+    return view !== null && view === satObserver.getView();
   }
-  enterObserverView(object, surfaceWorldPoint) {
+  createObserverView(object, surfaceWorldPoint) {
     const eyeHeight = toUnits(5); // km above surface
     const lookAhead = toUnits(100); // look at km ahead on horizon
     this.eventManager.reset();
     const marker = getMarker(toUnits(10), 0xFFFFFF, surfaceWorldPoint);
     object.worldToLocal(marker.position);
     object.add(marker);
-    const viewIndex = observer.enterObserverView(object, marker, eyeHeight, lookAhead);
+    const viewIndex = observer.createObserverView(object, marker, eyeHeight, lookAhead);
     return viewIndex;
   }
   placeObserverAt(latDeg, lonDeg) {
     this.eventManager.reset();
     observer.placeAt(latDeg, lonDeg);
   }
-  exitObserverView() {
+  disposeObserverView() {
     this.eventManager.reset();
     const marker = observer.marker;
     marker.removeFromParent();
     disposeMarker(marker);
-    observer.exitObserverView();
+    observer.disposeObserverView();
   }
   isObserverView() {
-    return views.getActive() === observer.getView();
+    const view = views.getActive();
+    return view !== null && view === observer.getView();
   }
   isOrbitLocked(object) {
     const lockedObjects = views.getOrbitLockedObjects();
