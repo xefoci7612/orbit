@@ -238,7 +238,7 @@ class ViewManager {
 
   dispose(viewIndex) {
     if (viewIndex === this.activeIdx) {
-      this.setDefault(); // dropping view under our feet
+      this.setActive(0); // dropping view under our feet
     }
     const view = this.get(viewIndex);
     view.camera.parent.remove(view.camera);
@@ -268,10 +268,6 @@ class ViewManager {
     // Important: Update camera aspect ratio on switch
     newView.camera.aspect = innerWidth / innerHeight;
     newView.camera.updateProjectionMatrix();
-  }
-
-  setDefault() {
-    this.setActive(0); // initial view is our default
   }
 
   clone(view) {

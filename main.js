@@ -12,8 +12,11 @@ const toDateStr = d => d.toISOString().slice(0, 10);
 const toTimeStr = d => d.toISOString().slice(11, 11 + 5); // HH:mm
 
 // Slider value moves linearly, we use a power law for actual speed
-const sliderToSpeed = v => Number(v) * Number(v) / 2.5;
-const speedToSlider = v => Math.sqrt(Math.abs(v * 2.5));
+const SIM_TIME_SPEED_UP = 60; // 1 simulation hour elapses in 1 minute
+const S0 = 30;
+const K0 = 10 * 10000 / 9600;
+const sliderToSpeed = s => K0 * Number(s) * Number(s) / (S0 * S0);
+const speedToSlider = v => Math.sqrt(Math.abs(v / K0)) * S0;
 
 // Formats a number like "+45.1°" or "-8.5°"
 function formatDegrees(num) {
@@ -76,6 +79,7 @@ const elementIds = {
   btnReset: 'btn-reset',
   speedSlider: 'speed-slider',
   speedOut: 'speed-out',
+  btnSpeed1x: 'btn-speed-1x',
   linkIndicator: 'link-indicator',
   observerBtn: 'observer-btn',
   observerCam: 'observer-cam',
@@ -280,9 +284,11 @@ function speedSliderChanged() {
 function updateSpeedUI() {
   const speed = simulation.speed();
   elem.speedSlider.value = speedToSlider(speed);
-  if (speed !== 0) // keep direction if speed == 0
+  if (speed !== 0) { // keep direction if speed == 0
     elem.btnReverse.textContent = speed < 0 ? '◅' : '▻';
-  elem.speedOut.textContent = (speed < 0 ?'−':'') + Math.abs(speed).toFixed(1)+' ×';
+  }
+  const realSpeed = (SIM_TIME_SPEED_UP * Math.abs(speed)).toFixed(1);
+  elem.speedOut.textContent = (speed < 0 ?'−':'') + realSpeed +' ×';
 }
 
 function sceneDoubleClicked(mouseX, mouseY) {
@@ -319,6 +325,11 @@ elem.satelliteBtn.onclick = () => {
     elem.satelliteBtn.style.background = '';
   }
 };
+
+elem.btnSpeed1x.onclick = () => {
+  elem.speedSlider.value = speedToSlider(1 / SIM_TIME_SPEED_UP);
+  speedSliderChanged();
+}
 
 elem.btnPlay.onclick = () => {
   const isPlay = simulation.togglePause();
@@ -428,6 +439,10 @@ window.addEventListener('load', () => {
   elem.loaderOverlay.addEventListener('transitionend', () => {
     elem.loaderOverlay.remove();
   });
+
+  // Sync UI with simulation initial state
+  simulation.update();
+  elem.btnReset.onclick();
 
   // If in validation mode run sampling code and exit
   if (VALIDATE) {

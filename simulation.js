@@ -456,9 +456,9 @@ if (DEBUG)
 
 // Initial/default camera view
 const defaultCameraPos = (function() {
-  const cameraDistance = toUnits(2 * MOON_DISTANCE_KM); // From Earth center
-  const cameraAzimuth = toRadians(180);  // Degrees clockwise from +Z axis
-  const cameraElevation = toRadians(10); // Degrees above horizontal plane
+  const cameraDistance = toUnits(1.2 * MOON_DISTANCE_KM); // From Earth center
+  const cameraAzimuth = toRadians(90);  // Degrees clockwise from +Z axis
+  const cameraElevation = toRadians(15); // Degrees above horizontal plane
   return new THREE.Vector3(
     cameraDistance * Math.cos(cameraElevation) * Math.sin(cameraAzimuth),
     cameraDistance * Math.sin(cameraElevation),
@@ -1026,7 +1026,7 @@ class Simulation {
   }
   reset() {
     this.clock.reset();
-    views.setDefault();
+    this.setActiveView(0);
   }
   saveView() {
     // Save camera position to keep current view

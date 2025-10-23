@@ -228,7 +228,7 @@ export class Observer {
       this.marker = marker;
 
       // Create a new observer view placed on the marker
-      const fov = this.onSatellite ? 90 : 120;
+      const fov = this.onSatellite ? 90 : 110;
       const viewIndex = this.views.createObserverView(marker, eyeHeight, lookAhead, fov);
       this.viewIndex = viewIndex;
 

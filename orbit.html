@@ -64,8 +64,11 @@
     }
     button { cursor: pointer; min-width: 32px; }
     button:hover { background: var(--color-primary-hover); }
-    input[type=range] { width: 90px; accent-color: var(--color-primary); background: var(--color-primary); }
-    #speed-out { width: 58px; text-align: right; }
+    input[type=range] {
+      width: 180px;
+      accent-color: var(--color-primary);
+      background: var(--color-primary);
+    }
     /* camera row */
     .hud__cam { justify-content: space-between; gap: 6px; }
     .cam-btn { width: 32px; opacity: var(--opacity-disabled); }
@@ -150,6 +153,49 @@
       background-color: var(--set-color);
       color: var(--color-white);
     }
+    /* data containers */
+    .data-box {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 6px 8px;
+      background: var(--color-background);
+      border: 1px solid var(--color-border-light);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .data-value {
+      font-family: monospace;
+      font-size: 14px;
+      color: var(--color-white);
+      opacity: 0.9;
+    }
+    .data-label {
+      font-weight: normal;
+      color: var(--color-white);
+      opacity: 0.55;
+      min-width: 30px;
+      text-align: center;
+    }
+    #observer-data-group .data-box input {
+      font-family: monospace;
+      font-size: 14px;
+      text-align: center;
+      padding: 2px 4px;
+    }
+    .speed-value-box {
+      display: flex;
+      align-items: center;
+      padding: 4px 8px;
+      background: var(--color-background);
+      border: 1px solid var(--color-border-light);
+      border-radius: 4px;
+      text-align: right;
+      font-family: monospace;
+      font-size: 14px;
+      color: var(--color-white);
+      opacity: 0.9;
+    }
   </style>
 </head>
 <body>
@@ -164,7 +210,7 @@
         <input id="sim-date" type="date">
         <input id="sim-time" type="time" step="60">
       </label>
-      <span id="sim-elapsed">+0.0 d</span>
+      <!-- <span id="sim-elapsed">+0.0 d</span>  -->
     </div>
 
     <!-- CENTRE LEFT -->
@@ -191,8 +237,9 @@
 
     <!-- CENTRE RIGHT -->
     <div class="hud__group">
-      <input id="speed-slider" type="range" min="0" max="50" step="0.5" value="1">
-      <output id="speed-out" for="speed-slider">1 ×</output>
+      <input id="speed-slider" type="range" min="0" max="120" step="0.2" value="1">
+      <output id="speed-out" for="speed-slider" class="speed-value-box">- ×</output>
+      <button id="btn-speed-1x" title="Set to real-time speed">1×</button>
     </div>
   </div>
 
@@ -208,20 +255,40 @@
       <button id="satellite-btn" title="Satellite Mode">🛰️</button>
     </div>
 
-    <!-- Group 2: Centered Observer Data (Initially Hidden) -->
     <div id="observer-data-group" class="hud__group" hidden>
-        <label>Az: <output id="azimuth-out"></output></label>
-        <label>El: <output id="elevation-out"></output></label>
-        <span style="margin: 0 8px;"></span>
-        <label>Lat: <input type="text" id="latitude-out"></label>
-        <label>Lon: <input type="text" id="longitude-out"></label>
+      <div class="data-box">
+        <span class="data-label">Azimuth</span>
+        <span class="data-value"><output id="azimuth-out">—</output></span>
+      </div>
+      <div class="data-box">
+        <span class="data-label">Elevation</span>
+        <span class="data-value"><output id="elevation-out">—</output></span>
+      </div>
+      <div class="data-box">
+        <span class="data-label">Latitude</span>
+        <input type="text" id="latitude-out" class="data-value" placeholder="—">
+      </div>
+      <div class="data-box">
+        <span class="data-label">Longitude</span>
+        <input type="text" id="longitude-out" class="data-value" placeholder="—">
+      </div>
     </div>
+
 
     <!-- Group 2: Centered Satellite Data (Initially Hidden) -->
     <div id="sat-data-group" class="hud__group" hidden>
-        <label>Height: <output id="sat-height-out"></output></label>
-        <label>Ground: <output id="sat-grn-speed-out"></output></label>
-        <label>Inertial: <output id="sat-ine-speed-out"></output></label>
+      <div class="data-box">
+        <span class="data-label">Height</span>
+        <span class="data-value"><output id="sat-height-out">—</output></span>
+      </div>
+      <div class="data-box">
+        <span class="data-label">Ground</span>
+        <span class="data-value"><output id="sat-grn-speed-out">—</output></span>
+      </div>
+      <div class="data-box">
+        <span class="data-label">Inertial</span>
+        <span class="data-value"><output id="sat-ine-speed-out">—</output></span>
+      </div>
     </div>
 
     <!-- Group 3: Right-aligned lock indicator -->
