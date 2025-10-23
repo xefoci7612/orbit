@@ -129,10 +129,14 @@ const JULIAN_YEAR = 365.25 * SOLAR_DAY;
 
 const EARTH_AXIAL_PERIOD = 25772 * JULIAN_YEAR;
 const MOON_ORBITAL_PERIOD = 27.32166 * SOLAR_DAY;
+const MOON_ANOMALISIC_PERIOD = 27.55455 * SOLAR_DAY;
 
 const GAST = HMSToRadians("08 52 45.4526"); // Greenwich Apparent Sidereal Time (GAST)
 const GAST_EPOCH = new Date('2025-09-10T09:34:03Z'); // Time of when GAST was sampled
 const GAST_TIME = (GAST_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
+
+const PERIGEE_EPOCH = new Date('2024-03-10T07:57:00Z');
+const PERIGEE_TIME = (PERIGEE_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
 
 // Standard atmospheric refraction in arcminutes
 const HORIZON_REFRACTION = toRadians(34.5 / 60);
@@ -452,7 +456,7 @@ satelliteAbsidalOrbitalPlane.add(satOrbitPath);
 
 // Add additional elements if debug is enabled
 if (DEBUG)
-    init_debug(scene, tiltedEarth, earth, satellite);
+    init_debug(scene, moon, tiltedMoon, moonNodesOrbitalPlane);
 
 // Initial/default camera view
 const defaultCameraPos = (function() {
@@ -810,13 +814,14 @@ function animate(simulation) {
   tiltedMoon.rotation.x = - toRadians(MOON_AXIAL_TILT);
 
   // Moon rotation around its Pole axis, in tidal locking with Earth
-  // Moon texture map is loaded centered on 0° longitude, the Prime Meridian of
-  // the Moon is aligned with its local +X axis.
-  // Moon's absidal local frame +X axis direction goes from the EMB to the Perigee,
-  // so when the Moon is at the Perigee the 0° longitude lies on the far side
-  // of the Moon. We rotate around Y axis of 180 degrees to move it facing Earth.
-  const moonRotationSpeed = 2 * Math.PI / MOON_ORBITAL_PERIOD;
-  moon.rotation.y = Math.PI + moonRotationSpeed * elapsedSeconds;
+  // Moon texture is loaded centered on 0° longitude, the Prime Meridian
+  // of the Moon is aligned with its local +X axis (from EMB to Moon)
+  // At perigee, libration is zero, and the Moon's Prime Meridian lies on
+  // the far side (so we rotate 180 degrees). We use anomalistic period
+  // because the motion is computed on the apsidal plane.
+  const moonRotationSpeed = 2 * Math.PI / MOON_ANOMALISIC_PERIOD;
+  const timeSincePerigee = elapsedSeconds - PERIGEE_TIME; // in secs
+  moon.rotation.y = Math.PI + moonRotationSpeed * timeSincePerigee;
 
   // Earth's axial tilt and retrograde (clockwise) precession.
   // Tilt is a negative rotation on the X-axis (Vernal Point direction). This orients
