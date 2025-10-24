@@ -4,6 +4,7 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
+    - when cloning for saving a view it should inherit the lock
 */
 
 
@@ -830,7 +831,7 @@ function animate(simulation) {
   // orients the North Pole towards the Winter Solstice direction, correctly
   // setting up the seasons.
   // Precession is a slow, negative rotation around the parent untilted Y-axis,
-  // not of the earth Y-axis that is day rotation.
+  // not the earth's one, that is day spin instead.
   const earthPrecessionSpeed = 2 * Math.PI / EARTH_AXIAL_PERIOD;
   untiltedEarth.rotation.y = - earthPrecessionSpeed * elapsedSeconds;
 

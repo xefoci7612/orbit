@@ -196,12 +196,36 @@
       color: var(--color-white);
       opacity: 0.9;
     }
+    #crosshair {
+      /* Visibility and Positioning */
+      display: none; /* Hidden by default */
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 10; /* Ensures it's above the canvas but below the loader */
+
+      /* Appearance */
+      color: #6B8E23; /* A bright, light green (GreenYellow) */
+      font-size: 26px;
+      font-weight: normal;
+      opacity: 0.6;
+
+      /* Interaction */
+      pointer-events: none; /* CRITICAL: Allows mouse events to pass through to the canvas */
+    }
+
+    /* A class to make the crosshair visible with JS */
+    #crosshair.visible {
+      display: block;
+    }
   </style>
 </head>
 <body>
 <div id="loader-overlay">
   <div class="loader-spinner"></div>
 </div>
+<div id="crosshair">+</div>
 <div id="hud">
   <div class="hud__row hud__main">
     <!-- LEFT -->

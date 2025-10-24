@@ -98,6 +98,7 @@ const elementIds = {
   prevEvent: 'prev-event',
   eventIndicator: 'event-indicator',
   nextEvent: 'next-event',
+  crosshair: 'crosshair',
 };
 
 const elem = {};
@@ -211,8 +212,9 @@ function camBtnReleased(slotIndex) {
       this.classList.add('saved');
     } else {
       if (simulation.isSatelliteView()) {
-        elem.satelliteBtn.onclick();
+        elem.satelliteBtn.onclick(); // reset button
       }
+      // Switch view here
       simulation.setActiveView(viewIndex);
     }
   }
@@ -427,6 +429,12 @@ function animationLoop() {
   }
 
   // Sync UI elements to new state
+  if (simulation.isObserverView()) {
+    crosshair.classList.add('visible');
+  } else {
+    crosshair.classList.remove('visible');
+  }
+
   updateDateTimeUI();
 
   // Schedule next step
