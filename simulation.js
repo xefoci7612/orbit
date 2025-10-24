@@ -67,18 +67,18 @@ import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Dry-run validation instead of normal visualization mode
 
-const EARTH_TEXTURE_URL = 'textures/earth_atmos_2048.jpg';
-const MOON_TEXTURE_URL = 'textures/moon_1024.jpg';
+const EARTH_TEXTURE_URL = './textures/earth_atmos_2048.jpg';
+const MOON_TEXTURE_URL = './textures/moon_1024.jpg';
 
 // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
 // FIXME convert to Heliocentric Ecliptic ICRS Frame
 const SKY_TEXTURE_URL = [
-    'textures/sky_px.png', // Right
-    'textures/sky_nx.png', // Left
-    'textures/sky_py.png', // Top
-    'textures/sky_ny.png', // Bottom
-    'textures/sky_pz.png', // Front
-    'textures/sky_nz.png'  // Back
+    './textures/sky_px.png', // Right
+    './textures/sky_nx.png', // Left
+    './textures/sky_py.png', // Top
+    './textures/sky_ny.png', // Bottom
+    './textures/sky_pz.png', // Front
+    './textures/sky_nz.png'  // Back
 ];
 
 // Physical conventional properties in kilometers or degrees
@@ -131,12 +131,14 @@ const EARTH_AXIAL_PERIOD = 25772 * JULIAN_YEAR;
 const MOON_ORBITAL_PERIOD = 27.32166 * SOLAR_DAY;
 const MOON_ANOMALISIC_PERIOD = 27.55455 * SOLAR_DAY;
 
+// From JPL Horizon
 const GAST = HMSToRadians("08 52 45.4526"); // Greenwich Apparent Sidereal Time (GAST)
 const GAST_EPOCH = new Date('2025-09-10T09:34:03Z'); // Time of when GAST was sampled
 const GAST_TIME = (GAST_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
 
-const PERIGEE_EPOCH = new Date('2024-03-10T07:57:00Z');
-const PERIGEE_TIME = (PERIGEE_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
+// From astropixels.com
+const APOGEE_EPOCH = new Date('2025-09-26T09:46:00Z');
+const APOGEE_TIME = (APOGEE_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
 
 // Standard atmospheric refraction in arcminutes
 const HORIZON_REFRACTION = toRadians(34.5 / 60);
@@ -413,27 +415,27 @@ moonAbsidalOrbitalPlane.add(moonOrbitPath);
 
 // Earth hierarchy
 //
-// Earth with tilted vertical axis, it is the object that orbits
-// around EMB point.
+// Earth with untilted vertical axis (same as Ecliptic North), it is
+// the object that orbits around EMB point.
 // In animation is set at a computed offset from EMB, local +X axis
 // is always aligned with World +X axis (toward Vernal Point)
-const tiltedEarth = new THREE.Object3D();
-embPivot.add(tiltedEarth);
+const untiltedEarth = new THREE.Object3D();
+embPivot.add(untiltedEarth);
 
 // The actual Earth Mesh object, performs daily rotation
-// around its pole axis
+// around its tilted pole axis
 const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
 const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
   new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
 );
-tiltedEarth.add(earth);
+untiltedEarth.add(earth);
 
 // Satellite hierarchy
 //
-// The entire satellite system is parented to the Earth
+// The satellite system is parented to the tilted rotating Earth
 const satelliteNodesOrbitalPlane = new THREE.Object3D();
-tiltedEarth.add(satelliteNodesOrbitalPlane);
+earth.add(satelliteNodesOrbitalPlane);
 
 const satelliteAbsidalOrbitalPlane = new THREE.Object3D();
 satelliteNodesOrbitalPlane.add(satelliteAbsidalOrbitalPlane);
@@ -456,7 +458,7 @@ satelliteAbsidalOrbitalPlane.add(satOrbitPath);
 
 // Add additional elements if debug is enabled
 if (DEBUG)
-    init_debug(scene, moon, tiltedMoon, moonNodesOrbitalPlane);
+    init_debug(scene, earth, moon);
 
 // Initial/default camera view
 const defaultCameraPos = (function() {
@@ -815,21 +817,26 @@ function animate(simulation) {
 
   // Moon rotation around its Pole axis, in tidal locking with Earth
   // Moon texture is loaded centered on 0° longitude, the Prime Meridian
-  // of the Moon is aligned with its local +X axis (from EMB to Moon)
-  // At perigee, libration is zero, and the Moon's Prime Meridian lies on
-  // the far side (so we rotate 180 degrees). We use anomalistic period
-  // because the motion is computed on the apsidal plane.
+  // of the Moon is aligned with its local +X axis (pointing to perigee)
+  // At apogee libration is zero and the Moon's +X axis points toward
+  // EMB / Earth direction. We use anomalistic period because the motion
+  // is computed on the apsidal plane.
   const moonRotationSpeed = 2 * Math.PI / MOON_ANOMALISIC_PERIOD;
-  const timeSincePerigee = elapsedSeconds - PERIGEE_TIME; // in secs
-  moon.rotation.y = Math.PI + moonRotationSpeed * timeSincePerigee;
+  const timeSincePerigee = elapsedSeconds - APOGEE_TIME; // in secs
+  moon.rotation.y = moonRotationSpeed * timeSincePerigee;
 
   // Earth's axial tilt and retrograde (clockwise) precession.
-  // Tilt is a negative rotation on the X-axis (Vernal Point direction). This orients
-  // the North Pole towards the Winter Solstice direction, correctly setting up
-  // the seasons. Precession is a slow, negative rotation around the tilted Y-axis.
+  // Tilt is a negative rotation on the X-axis (Vernal Point direction). This
+  // orients the North Pole towards the Winter Solstice direction, correctly
+  // setting up the seasons.
+  // Precession is a slow, negative rotation around the parent untilted Y-axis,
+  // not of the earth Y-axis that is day rotation.
   const earthPrecessionSpeed = 2 * Math.PI / EARTH_AXIAL_PERIOD;
-  tiltedEarth.rotation.x = - toRadians(EARTH_AXIAL_TILT);
-  tiltedEarth.rotation.y = - earthPrecessionSpeed * elapsedSeconds;
+  untiltedEarth.rotation.y = - earthPrecessionSpeed * elapsedSeconds;
+
+  // The tilting of the earth rely on the default rotation order of 'XYZ'.
+  // The tilt (rotation.x) must be applied before the daily spin (rotation.y)
+  earth.rotation.x = - toRadians(EARTH_AXIAL_TILT);
 
   // Earth daily rotation
   // Earth texture map is loaded centered on 0° longitude, the Prime Meridian of
@@ -852,7 +859,7 @@ function animate(simulation) {
                   .multiplyScalar(MOON_EARTH_MASS_RATIO)
                   .negate(); // EMB->Earth (in world frame)
   offsetToLocal(earthPosWorldVec, embPivot);
-  tiltedEarth.position.copy(earthPosWorldVec);
+  untiltedEarth.position.copy(earthPosWorldVec);
 
   // Satellite placement
   //
@@ -875,7 +882,7 @@ function animate(simulation) {
 
   if (simulation.validateMode) {
     const m = tiltedMoon.getWorldPosition(moonPosWorldVec);
-    const e = tiltedEarth.getWorldPosition(earthPosWorldVec);
+    const e = untiltedEarth.getWorldPosition(earthPosWorldVec);
     const emb = embPivot.getWorldPosition(embPosWorldVec);
 
     // Translate frame origin to EMB
@@ -893,7 +900,7 @@ function animate(simulation) {
   }
 
   // Set Sun light to look at Earth
-  tiltedEarth.getWorldPosition(earthPosWorldVec);
+  untiltedEarth.getWorldPosition(earthPosWorldVec);
   sunLight.target.position.copy(earthPosWorldVec);
 
   // Update the end point of the line to match the sun's new position
@@ -1036,7 +1043,7 @@ class Simulation {
   saveView() {
     // Save camera position to keep current view
     this.eventManager.reset();
-    tiltedEarth.getWorldPosition(earthPosWorldVec);
+    untiltedEarth.getWorldPosition(earthPosWorldVec);
     const view = views.getActive();
     view.setDefault(earthPosWorldVec);
   }
