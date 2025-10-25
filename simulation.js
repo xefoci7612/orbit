@@ -5,6 +5,7 @@
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
     - when cloning for saving a view it should inherit the lock
+    - fix fov when creating obsever view from satellite view
 */
 
 
@@ -63,17 +64,20 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
+import { Shaders } from './shaders.js';
 import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Dry-run validation instead of normal visualization mode
 
-const EARTH_TEXTURE_URL = './textures/earth_atmos_2048.jpg';
-const MOON_TEXTURE_URL = './textures/moon_1024.jpg';
+const EARTH_TEXTURE = './textures/Albedo.jpg';
+const EARTH_BUMP_MAP = './textures/Bump.jpg';
+const CITY_LIGHTS_TEXTURE = './textures/earth_lights.gif';
+const MOON_TEXTURE = './textures/moon_1024.jpg';
 
 // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
 // FIXME convert to Heliocentric Ecliptic ICRS Frame
-const SKY_TEXTURE_URL = [
+const SKY_TEXTURE = [
     './textures/sky_px.png', // Right
     './textures/sky_nx.png', // Left
     './textures/sky_py.png', // Top
@@ -339,21 +343,31 @@ function getOrbitPath(A, EC) {
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight); // Full viewport
 document.body.appendChild(renderer.domElement);
-const textureLoader = new THREE.TextureLoader();
-const cubeTextureLoader = new THREE.CubeTextureLoader();
+const shaders = new Shaders();
 const scene = new THREE.Scene();
-scene.background = cubeTextureLoader.load(SKY_TEXTURE_URL);
+
+// Load textures
+const textureLoader = new THREE.TextureLoader();
+const earthTexture = textureLoader.load(EARTH_TEXTURE);
+const earthBumpMap = textureLoader.load(EARTH_BUMP_MAP);
+const cityLightsTexture = textureLoader.load(CITY_LIGHTS_TEXTURE);
+const cubeTextureLoader = new THREE.CubeTextureLoader();
+scene.background = cubeTextureLoader.load(SKY_TEXTURE);
 
 // Ambient light for overall scene illumination
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.05); // White light, low intensity
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.01); // White light, low intensity
 scene.add(ambientLight);
 
 // Directional light for sun light, set at the Origin
-const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+const sunLight = new THREE.DirectionalLight(0xffffff, 0.6);
 sunLight.position.set(0, 0, 0); // default is 'looking from top'
 scene.add(sunLight);
 scene.add(sunLight.target); // target must be added too!
 
+// Blend some sodium lamp color into LED light
+const modernLED = new THREE.Color(0xFFF4D6);
+const classicSodium = new THREE.Color(0xFFB95A);
+const cityLightsColor = modernLED.lerp(classicSodium, 0.3);
 
 // Sun hierarchy
 //
@@ -399,7 +413,7 @@ moonAbsidalOrbitalPlane.add(tiltedMoon);
 
 // The actual Moon Mesh object, in tidal locked rotation
 // around its pole axis
-const moonTexture = textureLoader.load(MOON_TEXTURE_URL);
+const moonTexture = textureLoader.load(MOON_TEXTURE);
 const moon = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(MOON_RADIUS_KM), 32, 32),
   new THREE.MeshStandardMaterial({ map: moonTexture, roughness: 0.9 })
@@ -425,12 +439,30 @@ embPivot.add(untiltedEarth);
 
 // The actual Earth Mesh object, performs daily rotation
 // around its tilted pole axis
-const earthTexture = textureLoader.load(EARTH_TEXTURE_URL);
 const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
-  new THREE.MeshStandardMaterial({ map: earthTexture, roughness: 0.8 })
+  new THREE.MeshStandardMaterial({
+    map: earthTexture,
+    roughness: 0.6,
+    bumpMap: earthBumpMap,
+    bumpScale: 2,
+    emissiveMap: cityLightsTexture,
+    emissive: cityLightsColor,
+    emissiveIntensity: 0.1,
+  })
 );
 untiltedEarth.add(earth);
+
+// Define vectors for data exchange with custom shaders
+const normalizedSunRayGL = new THREE.Vector3();
+
+// Inject custom shaders for Earth Mesh
+earth.material.onBeforeCompile = (shader) => {
+  shaders.injectGLSL(shader, [
+    shaders.emissivemap(normalizedSunRayGL),
+    /* other shaders */
+  ]);
+};
 
 // Satellite hierarchy
 //
@@ -942,6 +974,12 @@ function animate(simulation) {
 
   // Update the active controls and render with the active camera
   const activeCamera = views.update();
+
+  // Update data exchange with shaders, vector should be in
+  // Camera View coordinates
+  normalizedSunRayGL.copy(earthPosWorldVec)
+                    .normalize()
+                    .transformDirection(activeCamera.matrixWorldInverse);
   renderer.render(scene, activeCamera);
 
   return simStepData;
