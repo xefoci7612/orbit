@@ -1,5 +1,7 @@
 'use strict';
 
+import * as THREE from 'three';
+
 export class Shaders {
 
   // Blocks emissive map during day time and add fresnel effect
@@ -38,7 +40,7 @@ export class Shaders {
           float NdotL = dot(vNormal, -uSunRay);
 
           // smoothstep yields 1.0 on the day side and 0.0 on the night side
-          float nightFactor = 1.0 - smoothstep(-0.3, 0.0, NdotL);
+          float nightFactor = 1.0 - smoothstep(-0.5, 0.0, NdotL);
           emissiveColor.rgb *= nightFactor;
 
         	totalEmissiveRadiance *= emissiveColor.rgb;
@@ -50,9 +52,9 @@ export class Shaders {
           vec3 blueColor = vec3( 0.3, 0.6, 1.0 );
           vec3 uToCamera = vec3( 0.0, 0.0, 1.0 );
           float intensity = 1.0 - clamp(dot( vNormal, uToCamera ), 0.2, 1.0);
-          vec3 atmosphere = blueColor * pow(intensity, 5.0);
+          vec3 fresnel = blueColor * pow(intensity, 5.0);
 
-          diffuseColor.rgb += atmosphere;
+          diffuseColor.rgb += fresnel;
 
         #endif
         `
@@ -82,4 +84,76 @@ export class Shaders {
 
     shader.fragmentShader = newSource;
   }
+};
+
+
+// Creates a complete ShaderMaterial configuration for a physically-based
+// atmospheric scattering shell.
+export function atmosphereShaderConfig(normalizedSunRay) {
+
+  const vertexShader = `
+    // We receive the vertex normal from the geometry
+    varying vec3 vNormal;
+
+    void main() {
+      // Pass the normal to the fragment shader, transformed into View Space
+      vNormal = normalize( normalMatrix * normal );
+
+      // Calculate the final position of the vertex
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+    }
+  `;
+
+  const fragmentShader = `
+    // We receive the View Space normal from the vertex shader
+    varying vec3 vNormal;
+
+    // We will pass the sun's direction in View Space as a uniform
+    uniform vec3 uSunDirectionView;
+
+    // Blue gradient for atmosphere height dependent color
+    uniform sampler2D uGradientMap;
+
+    void main() {
+      // 1. FRESNEL (Limb) EFFECT
+      // The dot product gives us a value from -1 (center) to 0 (edge).
+      // We use smoothstep to create a nice falloff from 0.0 to 1.0 at the limb.
+      float fresnel = smoothstep( 0.7, -0.3, vNormal.z );
+
+      // 2. SUN SCATTERING EFFECT
+      // We get the dot product of the normal with the sun's direction.
+      float sunDot = dot( vNormal, -uSunDirectionView );
+
+      // We only want the glow on the sunlit side, so we clamp negative values.
+      float sunlitFactor = max( sunDot, 0.0 );
+
+      // pow() gives us a bright "hotspot" where the sun is hitting directly,
+      // and it fades out nicely.
+      sunlitFactor = pow( sunlitFactor, 3.0 );
+
+      // The final brightness is the sum of the general limb glow and the sun hotspot.
+      float intensity = fresnel * 0.4 + sunlitFactor * 0.8;
+
+      // The atmosphere gets whiter/brighter where the sun hits it most directly.
+      vec3 baseColor = vec3(0.3, 0.6, 1.0); // Base sky blue
+      vec3 hazeColor = vec3(0.7, 0.8, 1.2); // Still bright, but distinctly blue
+      vec3 atmosphereColor = mix(baseColor, hazeColor, pow(sunlitFactor, 2.0));
+
+      // The final color is the atmosphere color multiplied by our calculated intensity.
+      // We set the alpha to the intensity to make it nicely transparent.
+      gl_FragColor = vec4( atmosphereColor * intensity, intensity );
+    }
+  `;
+
+  return {
+    vertexShader: vertexShader,
+    fragmentShader: fragmentShader,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.BackSide,
+    uniforms: {
+      uSunDirectionView: { value: normalizedSunRay }
+  }
+  };
 };

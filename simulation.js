@@ -64,15 +64,16 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
-import { Shaders } from './shaders.js';
+import { Shaders, atmosphereShaderConfig } from './shaders.js';
 import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
 export const VALIDATE = false; // Dry-run validation instead of normal visualization mode
 
-const EARTH_TEXTURE = './textures/Albedo.jpg';
-const EARTH_BUMP_MAP = './textures/Bump.jpg';
-const CITY_LIGHTS_TEXTURE = './textures/earth_lights.gif';
+// From NASA https://visibleearth.nasa.gov/
+const EARTH_TEXTURE = './textures/land_ocean_ice_8192.jpg';
+const EARTH_BUMP_MAP = './textures/gebco_08_rev_elev_10800x5400.jpg';
+const CITY_LIGHTS_TEXTURE = './textures/earth_lights_4320x2160.gif';
 const MOON_TEXTURE = './textures/moon_1024.jpg';
 
 // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
@@ -340,7 +341,7 @@ function getOrbitPath(A, EC) {
 }
 
 // Create renderer and scene
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 renderer.setSize(innerWidth, innerHeight); // Full viewport
 document.body.appendChild(renderer.domElement);
 const shaders = new Shaders();
@@ -355,7 +356,7 @@ const cubeTextureLoader = new THREE.CubeTextureLoader();
 scene.background = cubeTextureLoader.load(SKY_TEXTURE);
 
 // Ambient light for overall scene illumination
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.01); // White light, low intensity
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.02); // White light, low intensity
 scene.add(ambientLight);
 
 // Directional light for sun light, set at the Origin
@@ -367,7 +368,7 @@ scene.add(sunLight.target); // target must be added too!
 // Blend some sodium lamp color into LED light
 const modernLED = new THREE.Color(0xFFF4D6);
 const classicSodium = new THREE.Color(0xFFB95A);
-const cityLightsColor = modernLED.lerp(classicSodium, 0.3);
+const cityLightsColor = modernLED.lerp(classicSodium, 0.2);
 
 // Sun hierarchy
 //
@@ -445,7 +446,7 @@ const earth = new THREE.Mesh(
     map: earthTexture,
     roughness: 0.6,
     bumpMap: earthBumpMap,
-    bumpScale: 2,
+    bumpScale: 3,
     emissiveMap: cityLightsTexture,
     emissive: cityLightsColor,
     emissiveIntensity: 0.1,
@@ -454,12 +455,19 @@ const earth = new THREE.Mesh(
 untiltedEarth.add(earth);
 
 // Define vectors for data exchange with custom shaders
-const normalizedSunRayGL = new THREE.Vector3();
+const normalizedSunRayView = new THREE.Vector3();
 
-// Inject custom shaders for Earth Mesh
+// Create the atmosphere Mesh, we use our custom shader material
+const atmosphereConfig = atmosphereShaderConfig(normalizedSunRayView);
+const atmosphereGeometry = new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM + 40), 64, 64);
+const atmosphereMaterial = new THREE.ShaderMaterial({...atmosphereConfig });
+const atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
+earth.add(atmosphere);
+
+// Inject custom shaders for Earth and atmosphere Mesh
 earth.material.onBeforeCompile = (shader) => {
   shaders.injectGLSL(shader, [
-    shaders.emissivemap(normalizedSunRayGL),
+    shaders.emissivemap(normalizedSunRayView),
     /* other shaders */
   ]);
 };
@@ -977,9 +985,9 @@ function animate(simulation) {
 
   // Update data exchange with shaders, vector should be in
   // Camera View coordinates
-  normalizedSunRayGL.copy(earthPosWorldVec)
-                    .normalize()
-                    .transformDirection(activeCamera.matrixWorldInverse);
+  normalizedSunRayView.copy(earthPosWorldVec)
+                      .normalize()
+                      .transformDirection(activeCamera.matrixWorldInverse);
   renderer.render(scene, activeCamera);
 
   return simStepData;
