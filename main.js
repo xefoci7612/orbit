@@ -219,6 +219,7 @@ function camBtnReleased(slotIndex) {
       }
       // Switch view here
       simulation.setActiveView(viewIndex);
+      updateActiveBtn(this);
       updateLockUI();
     }
   }
@@ -305,6 +306,15 @@ function updateLockUI() {
   }
 }
 
+function updateActiveBtn(activeBtn) {
+  document.querySelectorAll('.cam-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  elem.satelliteBtn.classList.remove('active');
+  if (activeBtn)
+    activeBtn.classList.add('active');
+}
+
 function sceneDoubleClicked(mouseX, mouseY) {
   const hit = simulation.pickObject(mouseX, mouseY);
   if (!hit || simulation.isSatelliteView() || simulation.isObserverView())
@@ -333,9 +343,11 @@ elem.satelliteBtn.onclick = () => {
   if (!simulation.isSatelliteView()) {
     simulation.enterSatelliteView();
     elem.satelliteBtn.style.background = 'rgba(255,255,255,.5)';
+    updateActiveBtn(elem.satelliteBtn);
   } else {
     simulation.exitSatelliteView();
     elem.satelliteBtn.style.background = '';
+    updateActiveBtn(null);
   }
 };
 
@@ -363,6 +375,7 @@ elem.btnReset.onclick = () => {
   updateSpeedUI();
   updateDateTimeUI();
   updateLockUI();
+  updateActiveBtn(null);
 };
 
 function updateEventDisplay(event) {

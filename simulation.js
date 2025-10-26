@@ -4,7 +4,6 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
-    - when cloning for saving a view it should inherit the lock
     - fix fov when creating obsever view from satellite view
 */
 
