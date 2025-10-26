@@ -64,7 +64,7 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
-import { Shaders, atmosphereShaderConfig } from './shaders.js';
+import { addFresnelShader } from './shaders.js';
 import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
@@ -73,7 +73,6 @@ export const VALIDATE = false; // Dry-run validation instead of normal visualiza
 // From NASA https://visibleearth.nasa.gov/
 const EARTH_TEXTURE = './textures/land_ocean_ice_8192.jpg';
 const EARTH_BUMP_MAP = './textures/gebco_08_rev_elev_10800x5400.jpg';
-const CITY_LIGHTS_TEXTURE = './textures/earth_lights_4320x2160.gif';
 const MOON_TEXTURE = './textures/moon_1024.jpg';
 
 // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
@@ -344,19 +343,17 @@ function getOrbitPath(A, EC) {
 const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 renderer.setSize(innerWidth, innerHeight); // Full viewport
 document.body.appendChild(renderer.domElement);
-const shaders = new Shaders();
 const scene = new THREE.Scene();
 
 // Load textures
 const textureLoader = new THREE.TextureLoader();
 const earthTexture = textureLoader.load(EARTH_TEXTURE);
 const earthBumpMap = textureLoader.load(EARTH_BUMP_MAP);
-const cityLightsTexture = textureLoader.load(CITY_LIGHTS_TEXTURE);
 const cubeTextureLoader = new THREE.CubeTextureLoader();
 scene.background = cubeTextureLoader.load(SKY_TEXTURE);
 
 // Ambient light for overall scene illumination
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.02); // White light, low intensity
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.05); // White light, low intensity
 scene.add(ambientLight);
 
 // Directional light for sun light, set at the Origin
@@ -364,11 +361,6 @@ const sunLight = new THREE.DirectionalLight(0xffffff, 0.6);
 sunLight.position.set(0, 0, 0); // default is 'looking from top'
 scene.add(sunLight);
 scene.add(sunLight.target); // target must be added too!
-
-// Blend some sodium lamp color into LED light
-const modernLED = new THREE.Color(0xFFF4D6);
-const classicSodium = new THREE.Color(0xFFB95A);
-const cityLightsColor = modernLED.lerp(classicSodium, 0.2);
 
 // Sun hierarchy
 //
@@ -447,29 +439,14 @@ const earth = new THREE.Mesh(
     roughness: 0.6,
     bumpMap: earthBumpMap,
     bumpScale: 3,
-    emissiveMap: cityLightsTexture,
-    emissive: cityLightsColor,
-    emissiveIntensity: 0.1,
   })
 );
 untiltedEarth.add(earth);
 
-// Define vectors for data exchange with custom shaders
-const normalizedSunRayView = new THREE.Vector3();
-
-// Create the atmosphere Mesh, we use our custom shader material
-const atmosphereConfig = atmosphereShaderConfig(normalizedSunRayView);
-const atmosphereGeometry = new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM + 40), 64, 64);
-const atmosphereMaterial = new THREE.ShaderMaterial({...atmosphereConfig });
-const atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
-earth.add(atmosphere);
-
-// Inject custom shaders for Earth and atmosphere Mesh
+// Inject custom shaders for Earth
+const lightDirectionView = new THREE.Vector3(); // for data exchange
 earth.material.onBeforeCompile = (shader) => {
-  shaders.injectGLSL(shader, [
-    shaders.emissivemap(normalizedSunRayView),
-    /* other shaders */
-  ]);
+  addFresnelShader(shader, lightDirectionView);
 };
 
 // Satellite hierarchy
@@ -983,11 +960,12 @@ function animate(simulation) {
   // Update the active controls and render with the active camera
   const activeCamera = views.update();
 
-  // Update data exchange with shaders, vector should be in
-  // Camera View coordinates
-  normalizedSunRayView.copy(earthPosWorldVec)
-                      .normalize()
-                      .transformDirection(activeCamera.matrixWorldInverse);
+  // Update data exchange with shaders, vector must be in camera
+  // view space, light direction is from Earth to Sun
+  lightDirectionView.copy(earthPosWorldVec)
+                    .negate()
+                    .normalize()
+                    .transformDirection(activeCamera.matrixWorldInverse);
   renderer.render(scene, activeCamera);
 
   return simStepData;
