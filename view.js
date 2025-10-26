@@ -185,9 +185,9 @@ class ViewManager {
   init(earthPosWorldVec) {
     const target = earthPosWorldVec.clone();
     const position = earthPosWorldVec.clone().add(this.defaultPosition);
-    const mainViewIndex = this.create({ position: position,
-                                        up: new THREE.Vector3(0, 1, 0) },
-                                      { target: target });
+    const mainViewIndex = this.createView({ position: position,
+                                            up: new THREE.Vector3(0, 1, 0) },
+                                          { target: target });
     this.setActive(mainViewIndex);
   }
 
@@ -200,11 +200,12 @@ class ViewManager {
   }
 
   getOrbitLockedObjects() {
+    // Ignore observer and satellite views
     return this.views.filter(v => v.cameraLock !== null && !v.cameraLock.isFixedCamera)
-                     .map(v => v.cameraLock.object); // ignore observer views
+                     .map(v => v.cameraLock.object);
   }
 
-  create(cameraConfig, controlsConfig) {
+  createView(cameraConfig, controlsConfig) {
     const camera = new THREE.PerspectiveCamera(
       cameraConfig.fov || 45,
       innerWidth / innerHeight,
@@ -250,12 +251,19 @@ class ViewManager {
 
     // Disable current view
     const curView = this.getActive();
-    if (curView) // Can be null at startup
+    if (curView) { // at startup can be null
       curView.controls.enabled = false;
-
+      if (curView.cameraLock) {
+        curView.cameraLock.marker.visible = false;
+      }
+    }
     // Switch to new active view
     this.activeIdx = viewIndex;
     const newView = this.getActive();
+
+    if (newView.cameraLock) {
+      newView.cameraLock.marker.visible = true;
+    }
 
     // Initial positions are geocentric, convert to world coordinates
     const earthPosWorldVec = new THREE.Vector3();
@@ -273,8 +281,16 @@ class ViewManager {
   clone(view) {
     const camera = view.camera;
     const controls = view.controls;
-    const newViewIndex = this.create({ position: camera.position, up: camera.up },
-                                     { target: controls.target });
+
+    console.assert(!camera.isFixedCamera, "Cloned fixed camera view!");
+
+    const newViewIndex = this.createView({ position: camera.position, up: camera.up },
+                                         { target: controls.target });
+    const marker = view.getLockedObject();
+    if (marker !== null) {
+      const clonedView = this.get(newViewIndex);
+      clonedView.lockTo(marker, false, false);
+    }
     return newViewIndex;
   }
 
@@ -311,6 +327,12 @@ class ViewManager {
     view.lockTo(marker, false);
   }
 
+  // Unlock all the cameras from the marker
+  unlockFromOrbit(marker) {
+    this.views.filter(v => v.cameraLock !== null && v.cameraLock.marker === marker)
+              .forEach(view => view.unlock());
+  }
+
   // Setup the camera view for a observer on a planet surface,
   // camera is set to look toward Z-axis direction
   createObserverView(marker, eyeHeight, lookAhead, fov) {
@@ -341,7 +363,7 @@ class ViewManager {
     }
 
     // Create a new view and set a lock on so that camera will not drift
-    const viewIndex = this.create(cameraConfig, controlsConfig);
+    const viewIndex = this.createView(cameraConfig, controlsConfig);
     return viewIndex;
   }
 };

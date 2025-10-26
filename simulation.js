@@ -1137,12 +1137,16 @@ class Simulation {
     const lockedObjects = views.getOrbitLockedObjects();
     return lockedObjects.includes(object);
   }
-  unlockCamera() {
+  unlockFromOrbit() {
     const view = views.getActive();
     const marker = view.getLockedObject();
+    views.unlockFromOrbit(marker);
     marker.removeFromParent();
     disposeMarker(marker);
-    view.unlock();
+  }
+  isViewLocked() {
+    const view = views.getActive();
+    return view.getLockedObject() !== null;
   }
   cloneView() {
     const v = views.getActive();

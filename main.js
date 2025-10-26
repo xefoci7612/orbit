@@ -204,18 +204,22 @@ function camBtnReleased(slotIndex) {
       this.classList.remove('saved');
     }
   } else {
-    // Normal click: either save or restore camera
-    // according if slot is empty or not
+    // Normal click: either save or restore camera according
+    // if slot is empty or not. Saving a view on observer or
+    // satellite is not supported
     const viewIndex = slots[slotIndex];
     if (viewIndex === null) {
-      slots[slotIndex] = simulation.cloneView();
-      this.classList.add('saved');
+      if (!simulation.isObserverView() && !simulation.isSatelliteView()) {
+        slots[slotIndex] = simulation.cloneView();
+        this.classList.add('saved');
+      }
     } else {
       if (simulation.isSatelliteView()) {
         elem.satelliteBtn.onclick(); // reset button
       }
       // Switch view here
       simulation.setActiveView(viewIndex);
+      updateLockUI();
     }
   }
 }
@@ -293,6 +297,14 @@ function updateSpeedUI() {
   elem.speedOut.textContent = (speed < 0 ?'−':'') + realSpeed +' ×';
 }
 
+function updateLockUI() {
+  if (simulation.isViewLocked()){
+    elem.linkIndicator.classList.add('active');
+  } else {
+    elem.linkIndicator.classList.remove('active');
+  }
+}
+
 function sceneDoubleClicked(mouseX, mouseY) {
   const hit = simulation.pickObject(mouseX, mouseY);
   if (!hit || simulation.isSatelliteView() || simulation.isObserverView())
@@ -300,12 +312,11 @@ function sceneDoubleClicked(mouseX, mouseY) {
 
   // Clicked again on the already locked object?
   if (simulation.isOrbitLocked(hit.object)) {
-    simulation.unlockCamera();
-    elem.linkIndicator.classList.remove('active');
+    simulation.unlockFromOrbit();
   } else {
     simulation.lockToOrbit(hit.object, hit.point);
-    elem.linkIndicator.classList.add('active');
   }
+  updateLockUI();
 };
 
 elem.simDate.onchange = dateTimeChanged;
@@ -351,6 +362,7 @@ elem.btnReset.onclick = () => {
   simulation.reset();
   updateSpeedUI();
   updateDateTimeUI();
+  updateLockUI();
 };
 
 function updateEventDisplay(event) {
