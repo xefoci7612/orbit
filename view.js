@@ -199,6 +199,10 @@ class ViewManager {
     return this.activeIdx !== null ? this.views[this.activeIdx] : null;
   }
 
+  getActiveIdx() {
+    return this.activeIdx;
+  }
+
   getOrbitLockedObjects() {
     // Ignore observer and satellite views
     return this.views.filter(v => v.cameraLock !== null && !v.cameraLock.isFixedCamera)

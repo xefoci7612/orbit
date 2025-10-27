@@ -5,6 +5,7 @@
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
     - fix fov when creating obsever view from satellite view
+    - fix odd fov when creating observer view from satellite view
 */
 
 
@@ -1084,6 +1085,9 @@ class Simulation {
     this.view_needs_reset = true; // deferred to after simulation step
     this.eventManager.goToNextEvent(eventName, goNext, timeForward);
   }
+  getActiveView() {
+    return views.getActiveIdx();
+  }
   setActiveView(viewIndex) {
     views.setActive(viewIndex);
     // Hide orbit path clutter and set realistic scale for satellite
@@ -1092,12 +1096,11 @@ class Simulation {
     const scale = isLocalView ? SAT_REALISTIC_SCALE : 1.0;
     satellite.scale.set(scale, scale, scale);
   }
-  enterSatelliteView() {
+  createSatelliteView() {
     const eyeHeight = toUnits(0);   // km above surface
     const lookAhead = toUnits(100); // look at km ahead on horizon
-
     const viewIndex = satObserver.createObserverView(earth, satellite, eyeHeight, lookAhead);
-    this.setActiveView(viewIndex);
+    return viewIndex;
   }
   exitSatelliteView() {
     // FIXME actively change view to last one before dispose
@@ -1133,8 +1136,8 @@ class Simulation {
     return view !== null && view === observer.getView();
   }
   isOrbitLocked(object) {
-    const lockedObjects = views.getOrbitLockedObjects();
-    return lockedObjects.includes(object);
+    const locked = views.getOrbitLockedObjects();
+    return locked.includes(object);
   }
   unlockFromOrbit() {
     const view = views.getActive();
@@ -1145,7 +1148,7 @@ class Simulation {
   }
   isViewLocked() {
     const view = views.getActive();
-    return view.getLockedObject() !== null;
+    return view.cameraLock !== null && !view.cameraLock.isFixedCamera;
   }
   cloneView() {
     const v = views.getActive();
