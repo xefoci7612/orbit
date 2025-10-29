@@ -64,7 +64,7 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
-import { addFresnelShader } from './shaders.js';
+import { addEarthShaders, addCloudsShaders } from './shaders.js';
 import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
 export const DEBUG = false; // Enable axes and objects visualizations for debug purposes
@@ -73,6 +73,7 @@ export const VALIDATE = false; // Dry-run validation instead of normal visualiza
 // From NASA https://visibleearth.nasa.gov/
 const EARTH_TEXTURE = './textures/land_ocean_ice_8192.jpg';
 const EARTH_BUMP_MAP = './textures/gebco_08_rev_elev_10800x5400.jpg';
+const EARTH_CLOUD_MAP = './textures/cloud_combined_2048.jpg';
 const MOON_TEXTURE = './textures/moon_1024.jpg';
 
 // In celestial coordinates from https://svs.gsfc.nasa.gov/4851
@@ -347,8 +348,9 @@ const scene = new THREE.Scene();
 
 // Load textures
 const textureLoader = new THREE.TextureLoader();
-const earthTexture = textureLoader.load(EARTH_TEXTURE);
+const earthMap = textureLoader.load(EARTH_TEXTURE);
 const earthBumpMap = textureLoader.load(EARTH_BUMP_MAP);
+const earthCloudMap = textureLoader.load(EARTH_CLOUD_MAP);
 const cubeTextureLoader = new THREE.CubeTextureLoader();
 scene.background = cubeTextureLoader.load(SKY_TEXTURE);
 
@@ -435,7 +437,7 @@ embPivot.add(untiltedEarth);
 const earth = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM), 64, 64),
   new THREE.MeshStandardMaterial({
-    map: earthTexture,
+    map: earthMap,
     roughness: 0.6,
     bumpMap: earthBumpMap,
     bumpScale: 3,
@@ -443,10 +445,29 @@ const earth = new THREE.Mesh(
 );
 untiltedEarth.add(earth);
 
-// Inject custom shaders for Earth
+// Add clouds map and add to Earth object
+const clouds = new THREE.Mesh(
+  new THREE.SphereGeometry(toUnits(EARTH_RADIUS_KM + 10), 64, 64),
+  new THREE.MeshStandardMaterial({
+    alphaMap: earthCloudMap,
+    transparent: true,
+    bumpMap: earthCloudMap,
+    bumpScale: 2,
+    emissive: 0xffffff,
+    emissiveMap: earthCloudMap,
+    emissiveIntensity: 0.3,
+  })
+);
+earth.add(clouds);
+
+// Inject custom shaders for Earth and clouds
+let cloudsOffset = 0;
 const lightDirectionView = new THREE.Vector3(); // for data exchange
 earth.material.onBeforeCompile = (shader) => {
-  addFresnelShader(shader, lightDirectionView);
+  addEarthShaders(shader, lightDirectionView, earthCloudMap, cloudsOffset);
+};
+clouds.material.onBeforeCompile = (shader) => {
+  addCloudsShaders(shader, lightDirectionView);
 };
 
 // Satellite hierarchy
@@ -864,7 +885,9 @@ function animate(simulation) {
   // at the GAST epoch time.
   const earthRotationSpeed = 2 * Math.PI / SIDERAL_DAY;
   const timseSinceGAST = elapsedSeconds - GAST_TIME; // in secs
-  earth.rotation.y = GAST + earthRotationSpeed * timseSinceGAST;
+  const earthRotation = GAST + earthRotationSpeed * timseSinceGAST;
+  earth.rotation.y = earthRotation
+  clouds.rotation.y = 0.1 * earthRotation; // additional above Earth's
 
   // Earth placement according to barycenter rule
   //
@@ -966,6 +989,13 @@ function animate(simulation) {
                     .negate()
                     .normalize()
                     .transformDirection(activeCamera.matrixWorldInverse);
+
+  // Offset between clouds and earth texture
+  // Offset is zero at init (both textures are loaded centered), but
+  // changes due to different rotation speeds: it grows eastward
+  // Offset is mapped into (-1, 1)
+  cloudsOffset = (clouds.rotation.y / (2 * Math.PI)) % 1.0; // fractional part
+
   renderer.render(scene, activeCamera);
 
   return simStepData;
