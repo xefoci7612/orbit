@@ -4,7 +4,6 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
-    - fix fov when creating obsever view from satellite view
     - fix odd fov when creating observer view from satellite view
 */
 
@@ -537,8 +536,8 @@ function pickObject(mouseX, mouseY) {
   const view = views.getActive();
   raycaster.setFromCamera(mouse, view.camera);
 
-  // Find intersections with candidates
-  const intersects = raycaster.intersectObjects(trackableBodies);
+  // Find intersections with candidates (no recursive)
+  const intersects = raycaster.intersectObjects(trackableBodies, false);
   if (intersects.length === 0)
     return null;
 
@@ -1165,20 +1164,20 @@ class Simulation {
     const view = views.getActive();
     return view !== null && view === observer.getView();
   }
-  isOrbitLocked(object) {
-    const locked = views.getOrbitLockedObjects();
-    return locked.includes(object);
+  getLockedObject() {
+    const view = views.getActive();
+    const marker = view.getLockedMarker();
+    return marker !== null ? marker.parent : null;
+  }
+  isViewLocked() {
+    return this.getLockedObject() !== null;
   }
   unlockFromOrbit() {
     const view = views.getActive();
-    const marker = view.getLockedObject();
+    const marker = view.getLockedMarker();
     views.unlockFromOrbit(marker);
     marker.removeFromParent();
     disposeMarker(marker);
-  }
-  isViewLocked() {
-    const view = views.getActive();
-    return view.cameraLock !== null && !view.cameraLock.isFixedCamera;
   }
   cloneView() {
     const v = views.getActive();

@@ -163,7 +163,7 @@ class View {
     this.cameraLock = new CameraLock(marker, this, isFixedCamera, onSatellite);
   }
 
-  getLockedObject() {
+  getLockedMarker() {
     return this.cameraLock === null ? null : this.cameraLock.marker;
   }
 
@@ -201,12 +201,6 @@ class ViewManager {
 
   getActiveIdx() {
     return this.activeIdx;
-  }
-
-  getOrbitLockedObjects() {
-    // Ignore observer and satellite views
-    return this.views.filter(v => v.cameraLock !== null && !v.cameraLock.isFixedCamera)
-                     .map(v => v.cameraLock.object);
   }
 
   createView(cameraConfig, controlsConfig) {
@@ -290,7 +284,7 @@ class ViewManager {
 
     const newViewIndex = this.createView({ position: camera.position, up: camera.up },
                                          { target: controls.target });
-    const marker = view.getLockedObject();
+    const marker = view.getLockedMarker();
     if (marker !== null) {
       const clonedView = this.get(newViewIndex);
       clonedView.lockTo(marker, false, false);

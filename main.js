@@ -289,7 +289,8 @@ function syncUI() {
   elem.speedOut.textContent = (speed < 0 ?'−':'') + realSpeed +' ×';
 
   // Lock icon
-  if (simulation.isViewLocked()){
+  if (     simulation.isViewLocked()
+      && !(simulation.isSatelliteView() || simulation.isObserverView())) {
     elem.lockIndicator.classList.add('active');
   } else {
     elem.lockIndicator.classList.remove('active');
@@ -318,10 +319,16 @@ function sceneDoubleClicked(mouseX, mouseY) {
   if (!hit || simulation.isSatelliteView() || simulation.isObserverView())
     return;
 
-  // Clicked again on the already locked object?
-  if (simulation.isOrbitLocked(hit.object)) {
+  const lockedObject = simulation.getLockedObject();
+  const isDifferent = (hit.object !== lockedObject); // handles lockedObject == null case
+
+  // Clicked on an already locked object?
+  if (lockedObject !== null) {
     simulation.unlockFromOrbit();
-  } else {
+  }
+
+  // View is unlocked or new object is different?
+  if (isDifferent) {
     simulation.lockToOrbit(hit.object, hit.point);
   }
   syncUI();
