@@ -98,6 +98,10 @@
       border: 2px solid var(--color-light-blue);
       box-shadow: 0 0 8px var(--color-white-50-opacity);
     }
+    #open-input-panel.saved {
+      opacity: var(--opacity-enabled);
+      background: var(--color-white-50-opacity);
+    }
     #observer-btn.enabled {
       opacity: var(--opacity-enabled);
       background: var(--color-white-50-opacity);
@@ -232,13 +236,113 @@
     #crosshair.visible {
       display: block;
     }
+
+    #input-panel {
+      position: fixed;
+      top: 20%;
+      right: 20px;
+      transform: none;
+      z-index: 1000;
+      pointer-events: none; /* default non-blocking */
+    }
+
+    #input-panel:not([hidden]) {
+      pointer-events: auto; /* only when visible */
+    }
+
+    .panel-content {
+      background: rgba(0, 0, 0, 0.25); /* semi-transparent dark */
+      backdrop-filter: blur(6px);
+      border: 1px solid var(--color-border-light);
+      border-radius: 10px;
+      padding: 16px;
+      color: var(--color-white-50-opacity);
+      font: 14px system-ui, sans-serif;
+      width: 300px;
+      max-width: 90vw;
+    }
+
+    .panel-content h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      text-align: center;
+    }
+
+    .panel-content label {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 12px;
+      gap: 4px;
+    }
+
+    .panel-content input,
+    .panel-content select {
+      font: inherit;
+      padding: 6px 8px;
+      background: var(--color-primary);
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+      color: var(--color-white);
+    }
+
+    .panel-content select option {
+      color: var(--color-black);
+    }
+
+    .panel-buttons {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .panel-buttons button {
+      flex: 1;
+      padding: 6px;
+      background: var(--color-primary);
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+      color: var(--color-white);
+      cursor: pointer;
+    }
+
+    .panel-buttons button:hover {
+      background: var(--color-primary-hover);
+    }
   </style>
 </head>
 <body>
+
 <div id="loader-overlay">
   <div class="loader-spinner"></div>
 </div>
+
 <div id="crosshair">+</div>
+
+<div id="input-panel" hidden>
+  <div class="panel-content">
+    <h3>Satellite</h3>
+    <label>
+      Group:
+      <select id="panel-group">
+        <option value="" disabled selected>Select a group...</option>
+        <option value="Geo">Geo</option>
+      </select>
+    </label>
+    <label>
+      Name:
+      <select id="panel-name">
+        <option value="" disabled selected>Select a satellite...</option>
+        <option value="Eutelsat 7A">Eutelsat 7A</option>
+      </select>
+    </label>
+    <label>
+      Norad:
+      <input type="text" id="panel-norad" placeholder="e.g. 28187">
+    </label>
+  </div>
+</div>
+
 <div id="hud">
   <div class="hud__row hud__main">
     <!-- LEFT -->
@@ -288,7 +392,7 @@
       <button class="cam-btn" data-slot="3" title="Camera preset">3</button>
       <button id="observer-btn" title="Place Observer">📍</button>
       <button id="observer-cam" class="cam-btn" data-slot="4" hidden>4</button>
-      <button id="satellite-btn" class="cam-btn saved" data-slot="5" title="Satellite view">🛰️</button>
+      <button id="satellite-btn" class="cam-btn saved" data-slot="5" title="Satellite view" hidden>🛰️</button>
     </div>
 
     <div id="observer-data-group" class="hud__group" hidden>
@@ -330,6 +434,7 @@
     <!-- Group 3: Right-aligned lock indicator -->
     <div class="hud__group">
         <div id="lock-indicator" title="Camera view locked">🔒</div>
+        <button id="open-input-panel" title="Open input panel" hidden>⚙️</button>
     </div>
   </div>
 </div>

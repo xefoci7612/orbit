@@ -63,6 +63,7 @@ import * as THREE from 'three';
 import { ViewManager } from './view.js';
 import { CelestialEventManager } from './events.js';
 import { Observer } from './observer.js';
+import { Satellites, SAT_GROUPS, SAT_CHANGED } from './sat.js';
 import { addEarthShaders, addCloudsShaders } from './shaders.js';
 import { init_debug, set_sunline_length, addAxesHelper } from './validate.js';
 
@@ -229,10 +230,9 @@ function propagateMoon(julianCenturies) {
   };
 }
 
-// Example: ISS Orbital Elements (Osculating, for a specific epoch)
+// ISS Orbital Elements (Osculating, for a specific epoch)
 // Epoch: 2023-10-27 00:00:00 UTC
 const ISS_EPOCH = new Date('2023-10-27T00:00:00Z');
-const ISS_TIME = (ISS_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000; // in secs
 
 // Convert km to scene units
 const ISS_J2000 = {
@@ -242,8 +242,10 @@ const ISS_J2000 = {
   MA: toRadians(130.5),              // Mean Anomaly (deg) -> rad
   W:  toRadians(247.4),              // Argument of Perigee (deg) -> rad
   OM: toRadians(325.0),              // RAAN (deg) -> rad
-  EPOCH: ISS_EPOCH
+  EPOCH: ISS_EPOCH,
+  TIME: (ISS_EPOCH.getTime() - J2000_EPOCH.getTime()) / 1000, // in secs
 };
+let satelliteData = ISS_J2000;
 
 // Earth-specific constants for J₂ propagation
 const EARTH_MU = 398600.4418; // Standard gravitational parameter (km³/s²)
@@ -478,21 +480,13 @@ earth.add(satelliteNodesOrbitalPlane);
 const satelliteAbsidalOrbitalPlane = new THREE.Object3D();
 satelliteNodesOrbitalPlane.add(satelliteAbsidalOrbitalPlane);
 
-// The actual Satellite Mesh object
+// The actual Satellite Mesh object, defer adding it to later
 const SAT_VISIBILITY_SCALE = 20; // in km
 const SAT_REALISTIC_SCALE = 2 / SAT_VISIBILITY_SCALE;
 const satellite = new THREE.Mesh(
   new THREE.SphereGeometry(toUnits(SAT_VISIBILITY_SCALE), 8, 8),
   new THREE.MeshBasicMaterial({ color: 0xff0000 }) // Red
 );
-satelliteAbsidalOrbitalPlane.add(satellite);
-
-// An elliptical curve to show satellite's orbit, local +X axis points
-// toward periapsis
-const satEllipses = { A: toUnits(EARTH_RADIUS_KM + 417), EC: 0.0007 };
-const satOrbitPath = getOrbitPath(satEllipses.A, satEllipses.EC);
-satelliteAbsidalOrbitalPlane.add(satOrbitPath);
-
 
 // Add additional elements if debug is enabled
 if (DEBUG)
@@ -903,8 +897,8 @@ function animate(simulation) {
 
   // Satellite placement
   //
-  const timseSinceSatEpoch = elapsedSeconds - ISS_TIME; // in secs
-  const currentSatellite = propagateSatellite(ISS_J2000, timseSinceSatEpoch);
+  const timseSinceSatEpoch = elapsedSeconds - satelliteData.TIME; // in secs
+  const currentSatellite = propagateSatellite(satelliteData, timseSinceSatEpoch);
 
   // Apply orientation to the satellite's orbital planes
   satelliteNodesOrbitalPlane.rotation.order = 'YXZ';
@@ -1067,6 +1061,11 @@ class Simulation {
     this.eventManager = new CelestialEventManager(this, eventFuns);
     this.on = this.eventManager.on.bind(this.eventManager);
 
+    // Init satellites manager
+    this.satellites = new Satellites(J2000_EPOCH);
+    this.satOrbitPath = null;
+    this.satellites.on(SAT_CHANGED, this.activeSatChanged.bind(this));
+
     // A flag to handle deferred view update after date change
     this.view_needs_reset = false;
 
@@ -1078,6 +1077,24 @@ class Simulation {
     this.disposeView = views.dispose.bind(views);
     this.lockToOrbit = lockToOrbit;
     this.pickObject = pickObject;
+  }
+  activeSatChanged(sat) {
+    if (this.satOrbitPath !== null) {
+      satelliteAbsidalOrbitalPlane.remove(this.satOrbitPath);
+      this.satOrbitPath.geometry.dispose();
+      this.satOrbitPath.material.dispose();
+      this.satOrbitPath = null;
+    }
+    satelliteData = sat;
+    this.satOrbitPath = getOrbitPath(sat.A, sat.EC);
+    satelliteAbsidalOrbitalPlane.add(this.satOrbitPath);
+    if (satellite.parent === null) {
+      satelliteAbsidalOrbitalPlane.add(satellite);
+    }
+    // Recreate view if we are in satellite view
+    if (this.isSatelliteView()) {
+      this.setActiveView(this.getActiveView());
+    }
   }
   setDryRunFunction(fun) {
     this.dryRunFunction = fun;
@@ -1121,7 +1138,7 @@ class Simulation {
     views.setActive(viewIndex);
     // Hide orbit path clutter and set realistic scale for satellite
     const isLocalView = this.isSatelliteView() || this.isObserverView();
-    satOrbitPath.visible = !isLocalView;
+    if (this.satOrbitPath !== null) { this.satOrbitPath.visible = !isLocalView; }
     const scale = isLocalView ? SAT_REALISTIC_SCALE : 1.0;
     satellite.scale.set(scale, scale, scale);
   }

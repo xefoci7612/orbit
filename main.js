@@ -6,6 +6,7 @@
 
 import Simulation, { VALIDATE } from './simulation.js';
 import { CELESTIAL_EVENTS } from './events.js';
+import { SAT_GROUPS, SAT_DATA_READY } from './sat.js';
 import { runValidation } from './validate.js';
 
 const toDateStr = d => d.toISOString().slice(0, 10);
@@ -99,11 +100,27 @@ const elementIds = {
   satGrnSpeedOut: 'sat-grn-speed-out',
   satOrbitSpeedOut: 'sat-orbit-speed-out',
   lockIndicator: 'lock-indicator',
+  inputPanel: 'input-panel',
+  panelName: 'panel-name',
+  panelNorad: 'panel-norad',
+  panelGroup: 'panel-group',
+  openPanel: 'open-input-panel',
 };
 
 const elem = {};
 Object.entries(elementIds).forEach(([key, id]) => {
   elem[key] = document.getElementById(id);
+});
+
+// Populate satellite group select options
+while (elem.panelGroup.children.length > 0) {
+  elem.panelGroup.removeChild(elem.panelGroup.lastChild);
+}
+Object.values(SAT_GROUPS).forEach(group => {
+  const option = document.createElement('option');
+  option.value = group;
+  option.textContent = group;
+  elem.panelGroup.appendChild(option);
 });
 
 // A state-machine to handle observer UI transitions
@@ -388,6 +405,49 @@ function updateEventDisplay(event) {
   elem.eventIndicator.title = event.charAt(0).toUpperCase() + event.slice(1);
 }
 
+// Load satellite data when a different group is selected
+elem.panelGroup.addEventListener('change', function() {
+  const satGroup = this.value;
+  elem.panelName.disabled = true; // Prevent clicking stale satellite
+  simulation.satellites.setActiveGroup(satGroup);
+});
+
+simulation.satellites.on(SAT_DATA_READY, () => {
+  elem.satelliteBtn.hidden = false;
+  elem.openPanel.hidden = false;
+  elem.panelName.disabled = false;
+
+  const group = simulation.satellites.getActiveGrop();
+  const satellitesData = simulation.satellites.get(group);
+  const activeSat = simulation.satellites.getActiveSat();
+
+  // Clear existing options
+  while (elem.panelName.children.length > 1) {
+    elem.panelName.removeChild(elem.panelName.lastChild);
+  }
+
+  // Add new options
+  satellitesData.forEach(data => {
+    const option = document.createElement('option');
+    option.value = data.NAME;
+    option.textContent = data.NAME;
+    option.dataset.norad = data.NORAD_ID;
+    elem.panelName.appendChild(option);
+  });
+
+  // Select active satellite
+  elem.panelName.value = activeSat.NAME;
+  elem.panelName.dispatchEvent(new Event('change'));
+});
+
+// Auto-fill panel data when a satellite is selected
+elem.panelName.addEventListener('change', function() {
+  const opt = this.options[this.selectedIndex];
+  elem.panelNorad.value = opt.dataset.norad;
+  const satName = this.value;
+  simulation.satellites.setActiveSat(satName);
+});
+
 simulation.on(CELESTIAL_EVENTS.event, (name) => {
   updateEventDisplay(name);
   elem.eventGroup.hidden = false;
@@ -409,6 +469,12 @@ elem.nextEvent.onclick = () => {
   simulation.goToNextEvent(eventName, true, timeForward);
   syncUI();
 };
+
+elem.openPanel.onclick = () => {
+  const isHidden = !elem.inputPanel.hidden;
+  elem.inputPanel.hidden = isHidden;
+  elem.openPanel.classList.toggle('saved', !isHidden);
+}
 
 addEventListener('dblclick', (event) => {
   sceneDoubleClicked(event.clientX, event.clientY);
@@ -487,6 +553,11 @@ function animationLoop() {
 }
 
 window.addEventListener('load', () => {
+
+  // Trigger satellite data loading
+  elem.panelGroup.value = SAT_GROUPS[0];
+  elem.panelGroup.dispatchEvent(new Event('change'));
+
   // Remove loder overlay
   elem.loaderOverlay.classList.add('hidden'); // trigger fade-out transition
   elem.loaderOverlay.addEventListener('transitionend', () => {
