@@ -1,7 +1,5 @@
 'use strict';
 
-import { RepeatWrapping } from 'three';
-
 // Inject shader code before compile and preprocessing, shader is still
 // a list of #include directives.
 //
@@ -58,9 +56,6 @@ export function addEarthShaders(shader, lightDirection, earthCloudMap, cloudsOff
   Object.assign(shader.uniforms, uniforms);
   shader.fragmentShader = atTop + '\n' + shader.fragmentShader;
   shader.fragmentShader = shader.fragmentShader.replace(anchor, anchor + earthShader);
-
-  // Cloud texture sampler should work also in (-1 to 0] range
-  shader.uniforms.tClouds.value.wrapS = RepeatWrapping;
 }
 
 export function addCloudsShaders(shader, lightDirection) {

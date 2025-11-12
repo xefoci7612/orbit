@@ -5,6 +5,7 @@
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
     - fix odd fov when creating observer view from satellite view
+    - add zoom fov in observer/satellite views
 */
 
 
@@ -352,6 +353,7 @@ const textureLoader = new THREE.TextureLoader();
 const earthMap = textureLoader.load(EARTH_TEXTURE);
 const earthBumpMap = textureLoader.load(EARTH_BUMP_MAP);
 const earthCloudMap = textureLoader.load(EARTH_CLOUD_MAP);
+earthCloudMap.wrapS = THREE.RepeatWrapping; // sampler works also in (-1 to 0] range
 const cubeTextureLoader = new THREE.CubeTextureLoader();
 scene.background = cubeTextureLoader.load(SKY_TEXTURE);
 
@@ -957,7 +959,7 @@ function animate(simulation) {
   if (simulation.isObserverView()) {
     simStepData = observer.getGeoData()
   } else if (simulation.isSatelliteView()) {
-    simStepData = satObserver.getSatData(elapsedSeconds);
+    simStepData = satObserver.getSatData(elapsedSeconds, satelliteData);
   }
 
   // One time event to reset camera view after a change of date
@@ -965,6 +967,12 @@ function animate(simulation) {
     const view = views.getActive();
     view.reset(earthPosWorldVec);
     simulation.view_needs_reset = false;
+  }
+
+  // If satellite changed, reorient the satellite view first time it is activated
+  if (simulation.satelliteNeedsReorientation && simulation.isSatelliteView()) {
+    satObserver.reorientSatelliteView();
+    simulation.satelliteNeedsReorientation = false;
   }
 
   // If is first frame init main view and other stuff that requires
@@ -1066,8 +1074,9 @@ class Simulation {
     this.satOrbitPath = null;
     this.satellites.on(SAT_CHANGED, this.activeSatChanged.bind(this));
 
-    // A flag to handle deferred view update after date change
-    this.view_needs_reset = false;
+    // Flags to handle deferred updates
+    this.viewNeedsReset = false;
+    this.satelliteNeedsReorientation = false;
 
     this.update = () => animate(this);
     this.getTime = this.clock.getTime.bind(this.clock);
@@ -1079,7 +1088,9 @@ class Simulation {
     this.pickObject = pickObject;
   }
   activeSatChanged(sat) {
+    let isPathVisible = true;
     if (this.satOrbitPath !== null) {
+      isPathVisible = this.satOrbitPath.visible;
       satelliteAbsidalOrbitalPlane.remove(this.satOrbitPath);
       this.satOrbitPath.geometry.dispose();
       this.satOrbitPath.material.dispose();
@@ -1087,14 +1098,13 @@ class Simulation {
     }
     satelliteData = sat;
     this.satOrbitPath = getOrbitPath(sat.A, sat.EC);
+    this.satOrbitPath.visible = isPathVisible;
     satelliteAbsidalOrbitalPlane.add(this.satOrbitPath);
     if (satellite.parent === null) {
       satelliteAbsidalOrbitalPlane.add(satellite);
     }
-    // Recreate view if we are in satellite view
-    if (this.isSatelliteView()) {
-      this.setActiveView(this.getActiveView());
-    }
+    // Defer reorientation to next animation frame
+    this.satelliteNeedsReorientation = true;
   }
   setDryRunFunction(fun) {
     this.dryRunFunction = fun;
@@ -1120,15 +1130,15 @@ class Simulation {
   }
   setDate(newDate) {
     // While in dry run we don't want to override any pending reset
-    if (!this.view_needs_reset) {
+    if (!this.viewNeedsReset) {
       this.saveView();
-      this.view_needs_reset = true; // deferred to after simulation step
+      this.viewNeedsReset = true; // deferred to after simulation step
     }
     this.clock.setDate(newDate);
   }
   goToNextEvent(eventName, goNext, timeForward) {
     this.saveView();
-    this.view_needs_reset = true; // deferred to after simulation step
+    this.viewNeedsReset = true; // deferred to after simulation step
     this.eventManager.goToNextEvent(eventName, goNext, timeForward);
   }
   getActiveView() {

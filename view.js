@@ -247,6 +247,10 @@ class ViewManager {
 
   setActive(viewIndex) {
 
+    if (this.activeIdx === viewIndex) {
+      return; // already active
+    }
+
     // Disable current view
     const curView = this.getActive();
     if (curView) { // at startup can be null

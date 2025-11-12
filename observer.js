@@ -128,7 +128,7 @@ function placeAtNadir(nadirMarker, radius, curSatPos) {
 }
 
 // Calculates satellite ground speed and other surface data
-function getSatData(satellite, earth, elapsed) {
+function getSatData(satellite, earth, elapsed, satelliteData) {
 
   const earthRadius = earth.geometry.parameters.radius;
   const curSatPos = satellite.position;
@@ -155,7 +155,7 @@ function getSatData(satellite, earth, elapsed) {
 
   // Compute orbital speed by Vis-viva equation
   const r_km = fromUnits(curSatPos.length()); // in km
-  const a_km = EARTH_RADIUS_KM + 417; // FIXME do not hardcode
+  const a_km = fromUnits(satelliteData.A); // semi-major axis in km
   const speed_km_per_s_squared = MU_EARTH * ((2 / r_km) - (1 / a_km));
   const speed_km_per_s = Math.sqrt(speed_km_per_s_squared);
   const inertialSpeed = Math.floor(speed_km_per_s * 3600);
@@ -163,7 +163,7 @@ function getSatData(satellite, earth, elapsed) {
   // Place nadir marker to new current position
   const curNadirPos = placeAtNadir(nadirMarker, earthRadius, curSatPos);
 
-  // Get the angle between the previous and current nadir position vectors.
+  // Get the angle between the previous and current nadir position vectors
   const angle = prevNadirLocalPos.angleTo(curNadirPos);
 
   // The distance is the arc length: s = r * θ
@@ -206,10 +206,10 @@ export class Observer {
       return getGeoData(this.marker, view.controls.target);
     }
 
-    getSatData(elapsedSeconds) {
+    getSatData(elapsedSeconds, satelliteData) {
       if (this.object === null)
         return null;
-      return getSatData(this.marker, this.object, elapsedSeconds);
+      return getSatData(this.marker, this.object, elapsedSeconds, satelliteData);
     }
 
     // Set the oberver's local view
@@ -236,6 +236,10 @@ export class Observer {
       const view = this.views.get(viewIndex);
       view.lockTo(marker, true, this.onSatellite);
       return viewIndex;
+    }
+
+    reorientSatelliteView() {
+      orientSatellite(this.marker, this.object);
     }
 
     // Move the marker to a new position on planet surface
