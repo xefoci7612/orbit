@@ -5,7 +5,6 @@
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
     - fix odd fov when creating observer view from satellite view
-    - add zoom fov in observer/satellite views
 */
 
 
@@ -1084,6 +1083,7 @@ class Simulation {
     this.setSpeed = this.clock.setSpeed.bind(this.clock);
     this.togglePause = this.clock.togglePause.bind(this.clock);
     this.disposeView = views.dispose.bind(views);
+    this.changeFOV = views.changeFOV.bind(views);
     this.lockToOrbit = lockToOrbit;
     this.pickObject = pickObject;
   }

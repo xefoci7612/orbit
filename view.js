@@ -368,6 +368,28 @@ class ViewManager {
     const viewIndex = this.createView(cameraConfig, controlsConfig);
     return viewIndex;
   }
+
+  // Change FOV for the active view, only works for fixed camera views
+  changeFOV(delta) {
+    const activeView = this.getActive();
+    if (!activeView || !activeView.cameraLock || !activeView.cameraLock.isFixedCamera) {
+      return;
+    }
+
+    // Define FOV limits and sensitivity
+    const MIN_FOV = 20;
+    const MAX_FOV = 120;
+    const FOV_SENSITIVITY = 0.02;
+
+    // Scale the delta and calculate new FOV
+    const scaledDelta = delta * FOV_SENSITIVITY;
+    const curFOV = activeView.camera.fov;
+    const newFOV = Math.max(MIN_FOV, Math.min((curFOV + scaledDelta), MAX_FOV));
+
+    // Apply the new FOV
+    activeView.camera.fov = newFOV;
+    activeView.camera.updateProjectionMatrix();
+  }
 };
 
 export { ViewManager };

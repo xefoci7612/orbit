@@ -287,14 +287,18 @@ document.querySelectorAll('.cam-btn').forEach((b,i)=>{
   b.onmouseup = camBtnReleased.bind(b, slotIndex);
 });
 
-// Sync UI with simulation state
-function syncUI() {
-
-  // Date and time
+function syncDateTimeInputs() {
   const currentTime = simulation.getTime();
   const date = new Date(currentTime);
   elem.simDate.value = toDateStr(date);
   elem.simTime.value = toTimeStr(date);
+}
+
+// Sync UI with simulation state
+function syncUI() {
+
+  // Date and time
+  syncDateTimeInputs();
 
   // Speed slider
   const speed = simulation.speed();
@@ -484,6 +488,12 @@ addEventListener('resize', () => {
   simulation.resize();
 });
 
+renderer.domElement.addEventListener('wheel', (event) => {
+  if (simulation.isSatelliteView() || simulation.isObserverView()) {
+    simulation.changeFOV(event.deltaY);
+  }
+});
+
 const setEditMode = (element, isFocused) => {
   element.setAttribute('data-manual-edit', isFocused.toString());
 };
@@ -547,6 +557,9 @@ function animationLoop() {
       elem.satOrbitSpeedOut.textContent = `${simData.inertialSpeed} Km/h`;
     }
   }
+
+  // Sync only date/time inputs
+  syncDateTimeInputs();
 
   // Schedule next step
   requestAnimationFrame(animationLoop);
