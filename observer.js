@@ -49,16 +49,19 @@ function orientToSurface(marker) {
 }
 
 // Orient satellite local frame so camera (that by default
-// looks toward z-axis) will point "in the rear-view mirror"
+// looks toward +Z axis) will point "in the rear-view mirror"
 function orientSatellite(satellite, earth) {
-  const earthPosWorldVec = new THREE.Vector3();
-  earth.getWorldPosition(earthPosWorldVec);
-  // Rotates satellite so that its +Z axis points towards earth
-  satellite.lookAt(earthPosWorldVec);
-  // Now rotate to point to horizon 'behind'
+  // Vector from satellite to Earth's center in satellite local frame
+  const toEarth = satellite.position.clone().negate();
+
+  // Calculate the Y-rotation angle needed to align +Z with the target direction
+  // We project onto the XZ plane since Y-rotation doesn't affect the Y component
+  const angle = Math.atan2(toEarth.x, toEarth.z);
+
+  // Add horizon offset for "rear-view" effect
   const R = earth.geometry.parameters.radius;
-  const horizonAngle = Math.asin(R / satellite.position.length());
-  satellite.rotateY(horizonAngle);
+  const lookBehindAngle = Math.asin(R / toEarth.length());
+  satellite.rotation.set(0, angle + lookBehindAngle, 0);
 }
 
 // Calculates the Azimuth and Elevation of the views's current target point
@@ -213,7 +216,7 @@ export class Observer {
     }
 
     // Set the oberver's local view
-    createObserverView(object, marker, eyeHeight, lookAhead) {
+    createObserverView(object, marker, cameraLocalPos, targetLocalPos) {
 
       // Currently we handle only one observer
       console.assert(this.object === null, "Setting already existing observer");
@@ -229,7 +232,7 @@ export class Observer {
 
       // Create a new observer view placed on the marker
       const fov = this.onSatellite ? 90 : 110;
-      const viewIndex = this.views.createObserverView(marker, eyeHeight, lookAhead, fov);
+      const viewIndex = this.views.createObserverView(marker, cameraLocalPos, targetLocalPos, fov);
       this.viewIndex = viewIndex;
 
       // Lock the view camera on the marker

@@ -287,7 +287,7 @@ document.querySelectorAll('.cam-btn').forEach((b,i)=>{
   b.onmouseup = camBtnReleased.bind(b, slotIndex);
 });
 
-function syncDateTimeInputs() {
+function syncDateTime() {
   const currentTime = simulation.getTime();
   const date = new Date(currentTime);
   elem.simDate.value = toDateStr(date);
@@ -298,7 +298,7 @@ function syncDateTimeInputs() {
 function syncUI() {
 
   // Date and time
-  syncDateTimeInputs();
+  syncDateTime();
 
   // Speed slider
   const speed = simulation.speed();
@@ -558,8 +558,8 @@ function animationLoop() {
     }
   }
 
-  // Sync only date/time inputs
-  syncDateTimeInputs();
+  // Sync only date and time inputs
+  syncDateTime();
 
   // Schedule next step
   requestAnimationFrame(animationLoop);

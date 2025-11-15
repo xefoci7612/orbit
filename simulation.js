@@ -1153,9 +1153,9 @@ class Simulation {
     satellite.scale.set(scale, scale, scale);
   }
   createSatelliteView() {
-    const eyeHeight = toUnits(0);   // km above surface
-    const lookAhead = toUnits(100); // look at km ahead on horizon
-    const viewIndex = satObserver.createObserverView(earth, satellite, eyeHeight, lookAhead);
+    const cameraLocalPos = new THREE.Vector3(0, 0, 0); // On satellite
+    const targetLocalPos = new THREE.Vector3(0, 0, toUnits(100)); // +Z axis is toward Earth
+    const viewIndex = satObserver.createObserverView(earth, satellite, cameraLocalPos, targetLocalPos);
     return viewIndex;
   }
   exitSatelliteView() {
@@ -1167,13 +1167,14 @@ class Simulation {
     return view !== null && view === satObserver.getView();
   }
   createObserverView(object, surfaceWorldPoint) {
-    const eyeHeight = toUnits(5); // km above surface
-    const lookAhead = toUnits(100); // look at km ahead on horizon
+    // Observer View has +X axis pointing to North, we point target toward South
+    const cameraLocalPos = new THREE.Vector3(0, toUnits(1), 0); // km above surface
+    const targetLocalPos = new THREE.Vector3(-toUnits(100), toUnits(80), 0);
     this.eventManager.reset();
     const marker = getMarker(toUnits(10), 0xFFFFFF, surfaceWorldPoint);
     object.worldToLocal(marker.position);
     object.add(marker);
-    const viewIndex = observer.createObserverView(object, marker, eyeHeight, lookAhead);
+    const viewIndex = observer.createObserverView(object, marker, cameraLocalPos, targetLocalPos);
     return viewIndex;
   }
   placeObserverAt(latDeg, lonDeg) {

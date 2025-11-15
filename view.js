@@ -337,13 +337,9 @@ class ViewManager {
 
   // Setup the camera view for a observer on a planet surface,
   // camera is set to look toward Z-axis direction
-  createObserverView(marker, eyeHeight, lookAhead, fov) {
+  createObserverView(marker, cameraPosWorld, targetPosWorld, fov) {
 
-    // Camera postion and target must be in world coordinates,
-    // Observer View has +X axis pointing to North, we point the
-    // camera toward South
-    const cameraPosWorld = new THREE.Vector3(0, eyeHeight, 0);
-    const targetPosWorld = new THREE.Vector3(-lookAhead, 5 * eyeHeight, 0);
+    // Convert to world space
     marker.localToWorld(cameraPosWorld);
     marker.localToWorld(targetPosWorld);
 
