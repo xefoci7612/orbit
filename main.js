@@ -68,8 +68,24 @@ function fromDMS(valueString) {
 const simulation = new Simulation(VALIDATE);
 const renderer = simulation.getRenderer();
 
-// Camera views
+// Camera views and views history stack
 const slots = new Array(10).fill(null);
+const viewsStack = [0]; // start with default view
+
+// Return the previous (valid) view from the stack, viewStack
+// can contain stale view indices that are removed here
+function popView() {
+  while (viewsStack.length > 0) {
+    const viewIdx = viewsStack.at(-1);
+    if (simulation.isValidView(viewIdx)) {
+      return viewIdx;
+    }
+    // Remove stale view index
+    viewsStack.pop();
+  }
+  console.assert(false, "No valid view in stack!");
+  return null;
+}
 
 // DOM elements
 const elementIds = {
@@ -182,8 +198,12 @@ class ObserverUI {
       elem.observerCam.hidden = true;
       elem.eventGroup.hidden = true;
       renderer.domElement.removeEventListener('click', this.#placeObserverAt);
-      if (curState === "active")
+      if (curState === "active") {
         simulation.disposeObserverView();
+        const newViewIndex = popView();
+        simulation.setActiveView(newViewIndex);
+        syncUI();
+      }
     }
     this.state = newState;
   }
@@ -191,7 +211,7 @@ class ObserverUI {
 const observerUI = new ObserverUI();
 
 function exitSatelliteView() {
-  simulation.exitSatelliteView();
+  simulation.disposeSatelliteView();
   const satSlotIndex = parseInt(elem.satelliteBtn.dataset.slot);
   slots[satSlotIndex] = null;
 }
@@ -238,6 +258,8 @@ function camBtnReleased(slotIndex) {
     simulation.disposeView(viewIndex);
     slots[slotIndex] = null;
     this.classList.remove('saved');
+    const newViewIndex = popView();
+    simulation.setActiveView(newViewIndex);
 
   } else {
     // Normal click: switch the view
@@ -276,6 +298,7 @@ function camBtnReleased(slotIndex) {
 
     // Finally switch to the new view
     simulation.setActiveView(viewIndex);
+    viewsStack.push(viewIndex);
   }
   syncUI();
 }

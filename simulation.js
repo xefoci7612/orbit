@@ -4,7 +4,6 @@
   TODO:
     - When locked reset return to "at lock time" position
     - Show sun/raise events with a fading side legend
-    - fix odd fov when creating observer view from satellite view
 */
 
 
@@ -1152,14 +1151,20 @@ class Simulation {
     const scale = isLocalView ? SAT_REALISTIC_SCALE : 1.0;
     satellite.scale.set(scale, scale, scale);
   }
+  isValidView(viewIndex) {
+    const view = views.get(viewIndex);
+
+    console.assert(view !== undefined, "Invalid view index in isValidView:", viewIndex);
+
+    return view !== null;
+  }
   createSatelliteView() {
     const cameraLocalPos = new THREE.Vector3(0, 0, 0); // On satellite
     const targetLocalPos = new THREE.Vector3(0, 0, toUnits(100)); // +Z axis is toward Earth
     const viewIndex = satObserver.createObserverView(earth, satellite, cameraLocalPos, targetLocalPos);
     return viewIndex;
   }
-  exitSatelliteView() {
-    // FIXME actively change view to last one before dispose
+  disposeSatelliteView() {
     satObserver.disposeObserverView();
   }
   isSatelliteView() {

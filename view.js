@@ -236,19 +236,27 @@ class ViewManager {
   }
 
   dispose(viewIndex) {
-    if (viewIndex === this.activeIdx) {
-      this.setActive(0); // dropping view under our feet
-    }
+
     const view = this.get(viewIndex);
+
+    console.assert(view !== undefined, "Invalid view index in dispose:", viewIndex);
+
     view.camera.parent.remove(view.camera);
     view.controls.dispose();
     console.assert(view.cameraLock === null, "Disposing view with an active lock");
+
+    // Remove view withouth altering indices of other views
+    this.views[viewIndex] = null;
   }
 
   setActive(viewIndex) {
 
-    if (this.activeIdx === viewIndex) {
-      return; // already active
+    const newView = this.get(viewIndex);
+
+    console.assert(newView !== undefined, "Invalid view index in setActive:", viewIndex);
+
+    if (this.activeIdx === viewIndex || newView === null) {
+      return; // already active or already disposed
     }
 
     // Disable current view
@@ -261,7 +269,6 @@ class ViewManager {
     }
     // Switch to new active view
     this.activeIdx = viewIndex;
-    const newView = this.getActive();
 
     if (newView.cameraLock) {
       newView.cameraLock.marker.visible = true;
@@ -299,7 +306,7 @@ class ViewManager {
   update() {
     // Update positions of locked cameras
     this.views.forEach(view => {
-      if (view.cameraLock)
+      if (view !== null && view.cameraLock)
         view.cameraLock.update();
     });
     // Update controls of active camera
@@ -331,7 +338,7 @@ class ViewManager {
 
   // Unlock all the cameras from the marker
   unlockFromOrbit(marker) {
-    this.views.filter(v => v.cameraLock !== null && v.cameraLock.marker === marker)
+    this.views.filter(v => v && v.cameraLock !== null && v.cameraLock.marker === marker)
               .forEach(view => view.unlock());
   }
 
